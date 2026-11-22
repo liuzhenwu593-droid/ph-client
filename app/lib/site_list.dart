@@ -2,8 +2,8 @@
 ///
 /// The Webmasters JSON API has no category-listing endpoint: it can list
 /// categories (names + ids) but not the videos inside one. The site's own
-/// /video?c=<id> pages do, with a server-rendered list in
-/// <ul id="videoCategory">.
+/// `/video?c=<id>` pages do, with a server-rendered list in
+/// `<ul id="videoCategory">`.
 ///
 /// Verified live 2026-11-22 from this VM:
 /// - GET /video?c=37 -> 200, 30 items in #videoCategory, page=2 works
@@ -148,7 +148,7 @@ List<VideoItem> parseSiteList(String html) {
   return videos;
 }
 
-/// Videos inside one category (site page /video?c=<id>).
+/// Videos inside one category (site page `/video?c=<id>`).
 Future<List<VideoItem>> directCategoryVideos(
   int categoryId, {
   int page = 1,

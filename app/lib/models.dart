@@ -81,8 +81,9 @@ class VideoItem {
   }
 
   String get viewsLabel {
-    if (views >= 1000000)
+    if (views >= 1000000) {
       return '${(views / 1000000).toStringAsFixed(1)}M views';
+    }
     if (views >= 1000) return '${(views / 1000).toStringAsFixed(1)}K views';
     return '$views views';
   }
@@ -142,8 +143,9 @@ class VideoDetail {
     final sources = <VideoSource>[];
     if (raw is List) {
       for (final item in raw) {
-        if (item is Map<String, dynamic>)
+        if (item is Map<String, dynamic>) {
           sources.add(VideoSource.fromJson(item));
+        }
       }
     }
     return VideoDetail(
@@ -209,7 +211,7 @@ class VideoDetail {
 }
 
 /// One category from the Webmasters category list (243 entries).
-/// The id is what the site's /video?c=<id> pages use.
+/// The id is what the site's `/video?c=<id>` pages use.
 class CategoryItem {
   const CategoryItem({required this.id, required this.name});
 

@@ -9,7 +9,7 @@ import '../widgets/video_list.dart';
 import 'player_page.dart';
 
 /// Category browser (243 categories from the Webmasters list).
-/// Tapping a category opens its videos via the site's /video?c=<id> pages.
+/// Tapping a category opens its videos via the site's `/video?c=<id>` pages.
 class CategoriesPage extends StatefulWidget {
   const CategoriesPage({
     super.key,

@@ -120,6 +120,7 @@ class DownloadItem {
   }
 
   DownloadItem copyWith({
+    int? totalSegments,
     int? downloadedSegments,
     int? sizeBytes,
     DownloadStatus? status,
@@ -132,7 +133,7 @@ class DownloadItem {
       duration: duration,
       qualityLabel: qualityLabel,
       dirName: dirName,
-      totalSegments: totalSegments,
+      totalSegments: totalSegments ?? this.totalSegments,
       downloadedSegments: downloadedSegments ?? this.downloadedSegments,
       sizeBytes: sizeBytes ?? this.sizeBytes,
       downloadedAtMs: downloadedAtMs,
@@ -148,8 +149,9 @@ class DownloadManager extends ChangeNotifier {
     for (final item in raw) {
       try {
         final data = jsonDecode(item);
-        if (data is Map<String, dynamic>)
+        if (data is Map<String, dynamic>) {
           _items.add(DownloadItem.fromJson(data));
+        }
       } catch (_) {
         // Skip one corrupt entry.
       }

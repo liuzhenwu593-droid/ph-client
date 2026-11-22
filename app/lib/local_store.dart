@@ -121,8 +121,9 @@ class WatchStore extends ChangeNotifier {
     for (final item in raw) {
       try {
         final data = jsonDecode(item);
-        if (data is Map<String, dynamic>)
+        if (data is Map<String, dynamic>) {
           _entries.add(WatchEntry.fromJson(data));
+        }
       } catch (_) {
         // Skip one corrupt entry.
       }

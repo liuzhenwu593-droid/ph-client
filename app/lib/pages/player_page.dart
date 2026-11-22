@@ -13,6 +13,10 @@ import '../ph_api.dart';
 import '../settings.dart';
 import '../widgets/video_list.dart';
 
+/// Playback speeds offered in the player menu (shared by the state and
+/// the controls overlay below).
+const _speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
 /// Video detail + player. HLS (m3u8) is played by ExoPlayer under the hood.
 /// The player gets Origin + Referer headers: yt-dlp's extractor notes
 /// manifest requests need them to avoid HTTP 412.
@@ -92,8 +96,6 @@ class _PlayerPageState extends State<PlayerPage> {
     'Origin': 'https://www.pornhub.com',
   };
 
-  static const _speedOptions = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-
   bool get _isLocal => widget.localFile != null;
 
   @override
@@ -105,7 +107,7 @@ class _PlayerPageState extends State<PlayerPage> {
 
   Future<void> _initBrightness() async {
     try {
-      _initialBrightness = await ScreenBrightness().currentBrightness;
+      _initialBrightness = await ScreenBrightness().application;
       if (mounted) setState(() => _brightness = _initialBrightness ?? 1.0);
     } catch (_) {
       // Brightness control unavailable: swipe still adjusts volume.
@@ -414,7 +416,9 @@ class _PlayerPageState extends State<PlayerPage> {
       _showSwipeFlash('音量 ${(_volume * 100).round()}%');
     } else {
       _brightness = (_dragStartBrightness + delta).clamp(0.1, 1.0);
-      ScreenBrightness().setScreenBrightness(_brightness).catchError((_) {});
+      ScreenBrightness()
+          .setApplicationScreenBrightness(_brightness)
+          .catchError((_) {});
       _showSwipeFlash('亮度 ${(_brightness * 100).round()}%');
     }
     if (mounted) setState(() {});
@@ -487,7 +491,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _recordPosition(force: true);
     if (_initialBrightness != null) {
       ScreenBrightness()
-          .setScreenBrightness(_initialBrightness!)
+          .setApplicationScreenBrightness(_initialBrightness!)
           .catchError((_) {});
     }
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -872,7 +876,7 @@ class _ControlsOverlay extends StatelessWidget {
               PopupMenuButton<double>(
                 initialValue: speed,
                 onSelected: onSpeedChanged,
-                itemBuilder: (context) => const [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+                itemBuilder: (context) => _speedOptions
                     .map((s) => PopupMenuItem(value: s, child: Text('${s}x')))
                     .toList(),
                 child: Chip(
