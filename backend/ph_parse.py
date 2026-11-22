@@ -33,6 +33,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 BASE = "https://www.pornhub.com"
 
@@ -333,7 +334,7 @@ def _start_candidate(sources):
     return min(hls, key=lambda s: s.get("height") or 0)
 
 
-def video_sources(viewkey, max_attempts=5):
+def video_sources(viewkey, max_attempts=10):
     """Fetch the detail page and return playable sources.
 
     Returns {"viewkey", "title", "duration", "thumb", "sources": [...]} where
@@ -343,50 +344,58 @@ def video_sources(viewkey, max_attempts=5):
     Pornhub ever serves it again.
 
     RETRY BEHAVIOUR (found 2026-11-22, verified live): Pornhub randomly
-    serves one of two HLS URL schemes for the same video, roughly 50/50:
+    serves one of two HLS URL schemes for the same video:
     - ev-h.phncdn.com ... ?validfrom=&validto=&hash=  -> master.m3u8 200.
     - hv-h.phncdn.com ... ?h=<token>&e=<exp>&f=1     -> master.m3u8 410 Gone
       under every header combination tried (curl/HTTP2, full browser
       headers incl. Origin+Referer, session cookies). Possibly the new
       scheme needs a real browser's TLS fingerprint or a JS-set cookie;
-      it may still play in ExoPlayer on a phone — unproven, so v1 treats
-      it as dead. Each attempt re-fetches the detail page until the
+      it may still play in ExoPlayer on a phone — unproven, so it is
+      treated as dead. Each attempt re-fetches the detail page until the
       *start* HLS URL verifies with a real playlist GET (only ~235 bytes).
-      5 attempts ~= 97% success at 50% per attempt.
       v0.2: only the start candidate (480p) is verified, not the 1080p
       top URL — the player starts at 480p and upgrades afterwards.
+      v0.2.1: attempts run in PARALLEL rounds (2 rounds x 5 concurrent).
+      The ev-h share per fetch has dropped to ~20-40% (it was ~50% when
+      first measured), so 5 sequential attempts failed ~17-33% of videos;
+      10 attempts cut that to ~3-11% and a round takes ~2s instead of ~9s.
     """
+    per_round = 5
+    rounds = (max_attempts + per_round - 1) // per_round
     last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            flashvars, sources = _fetch_sources_once(viewkey)
-        except ParseError as exc:
-            last_error = exc
-            if attempt < max_attempts:
-                time.sleep(1.0)
-                continue
-            raise
-        sources.sort(
-            key=lambda s: (
-                0 if s["format"] == "hls" else 1,
-                -(s["height"] or 0),
-            )
-        )
-        start = _start_candidate(sources)
-        if start and _verify_hls(start["url"], viewkey):
-            return {
-                "viewkey": viewkey,
-                "title": flashvars.get("video_title", ""),
-                "duration": flashvars.get("video_duration", 0),
-                "thumb": flashvars.get("image_url", ""),
-                "sources": sources,
-            }
-        last_error = ParseError(
-            f"attempt {attempt}: start HLS URL did not verify "
-            f"(host={start['url'].split('/')[2] if start else 'none'})"
-        )
-        if attempt < max_attempts:
-            time.sleep(1.5)
+    for _round in range(rounds):
+        with ThreadPoolExecutor(max_workers=per_round) as pool:
+            results = list(pool.map(lambda _: _try_once(viewkey), range(per_round)))
+        for payload, error in results:
+            if payload is not None:
+                return payload
+            last_error = error or last_error
     raise ParseError(
         f"no verifiable HLS URL after {max_attempts} attempts: {last_error}"
     )
+
+
+def _try_once(viewkey):
+    """One fetch-and-verify attempt. Returns (payload, None) on success,
+    (None, error) on failure. Never raises."""
+    try:
+        flashvars, sources = _fetch_sources_once(viewkey)
+    except ParseError as exc:
+        return None, exc
+    sources.sort(
+        key=lambda s: (
+            0 if s["format"] == "hls" else 1,
+            -(s["height"] or 0),
+        )
+    )
+    start = _start_candidate(sources)
+    if start and _verify_hls(start["url"], viewkey):
+        return {
+            "viewkey": viewkey,
+            "title": flashvars.get("video_title", ""),
+            "duration": flashvars.get("video_duration", 0),
+            "thumb": flashvars.get("image_url", ""),
+            "sources": sources,
+        }, None
+    host = start["url"].split("/")[2] if start else "none"
+    return None, ParseError(f"start HLS URL did not verify (host={host})")

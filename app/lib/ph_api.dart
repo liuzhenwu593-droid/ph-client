@@ -25,6 +25,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'list_cache.dart';
 import 'models.dart';
 import 'ph_parse.dart' as direct;
 import 'play_cache.dart';
@@ -84,7 +85,23 @@ class PhApi {
   String? _backendUrl;
   final PlaybackCache? _cache;
 
+  /// Short-lived list cache (5 min): within the TTL, pages show the
+  /// cached list instantly and refresh silently in the background.
+  final ListCache lists = ListCache();
+
   bool get usesBackend => _backendUrl != null;
+
+  /// Synchronous cache peek for pages: fresh cached items, or null.
+  List<VideoItem>? peekHome({int page = 1}) => lists.peek('home:$page');
+
+  List<VideoItem>? peekSearch(
+    String query, {
+    SearchOrdering ordering = SearchOrdering.mostViewed,
+    int page = 1,
+  }) => lists.peek('search:$query:${ordering.apiValue}:$page');
+
+  List<VideoItem>? peekCategory(int categoryId, {int page = 1}) =>
+      lists.peek('category:$categoryId:$page');
 
   Future<Map<String, dynamic>> _getBackendJson(String path) async {
     final base = _backendUrl;
@@ -123,23 +140,39 @@ class PhApi {
         .toList();
   }
 
-  Future<List<VideoItem>> home({int page = 1}) async {
+  Future<List<VideoItem>> home({int page = 1, bool forceRefresh = false}) async {
+    final key = 'home:$page';
+    if (!forceRefresh) {
+      final cached = lists.peek(key);
+      if (cached != null) return cached;
+    }
+    final List<VideoItem> items;
     if (usesBackend) {
       try {
-        return _videosFrom(await _getBackendJson('/api/home?page=$page'));
+        items = _videosFrom(await _getBackendJson('/api/home?page=$page'));
+        lists.put(key, items);
+        return items;
       } on ApiException {
         // Fall through to direct parsing below.
       }
     }
-    return direct.directSearch('', page: page);
+    items = await direct.directSearch('', page: page);
+    lists.put(key, items);
+    return items;
   }
 
   Future<List<VideoItem>> search(
     String query, {
     int page = 1,
     SearchOrdering ordering = SearchOrdering.mostViewed,
+    bool forceRefresh = false,
   }) async {
+    final key = 'search:$query:${ordering.apiValue}:$page';
     List<VideoItem> items;
+    if (!forceRefresh) {
+      final cached = lists.peek(key);
+      if (cached != null) return _sortedSearch(cached, ordering);
+    }
     if (usesBackend) {
       try {
         final encoded = Uri.encodeQueryComponent(query);
@@ -162,18 +195,30 @@ class PhApi {
         ordering: ordering.apiValue,
       );
     }
+    lists.put(key, items);
     // Client-side sort: the API only honours mostviewed server-side.
+    return _sortedSearch(items, ordering);
+  }
+
+  /// Sort a search page client-side (the API only honours mostviewed
+  /// server-side). Returns a sorted copy; the cached original is kept
+  /// unsorted so another ordering can sort it differently.
+  List<VideoItem> _sortedSearch(
+    List<VideoItem> items,
+    SearchOrdering ordering,
+  ) {
+    final sorted = List<VideoItem>.of(items);
     switch (ordering) {
       case SearchOrdering.topRated:
-        items.sort((a, b) => b.rating.compareTo(a.rating));
+        sorted.sort((a, b) => b.rating.compareTo(a.rating));
       case SearchOrdering.mostRecent:
-        items.sort((a, b) => b.publishDate.compareTo(a.publishDate));
+        sorted.sort((a, b) => b.publishDate.compareTo(a.publishDate));
       case SearchOrdering.longest:
-        items.sort((a, b) => b.durationSeconds.compareTo(a.durationSeconds));
+        sorted.sort((a, b) => b.durationSeconds.compareTo(a.durationSeconds));
       case SearchOrdering.mostViewed:
         break;
     }
-    return items;
+    return sorted;
   }
 
   Future<List<CategoryItem>> categories() async {
@@ -195,17 +240,31 @@ class PhApi {
     return site.directCategories();
   }
 
-  Future<List<VideoItem>> categoryVideos(int categoryId, {int page = 1}) async {
+  Future<List<VideoItem>> categoryVideos(
+    int categoryId, {
+    int page = 1,
+    bool forceRefresh = false,
+  }) async {
+    final key = 'category:$categoryId:$page';
+    if (!forceRefresh) {
+      final cached = lists.peek(key);
+      if (cached != null) return cached;
+    }
+    final List<VideoItem> items;
     if (usesBackend) {
       try {
-        return _videosFrom(
+        items = _videosFrom(
           await _getBackendJson('/api/category?id=$categoryId&page=$page'),
         );
+        lists.put(key, items);
+        return items;
       } on ApiException {
         // Fall through to direct parsing below.
       }
     }
-    return site.directCategoryVideos(categoryId, page: page);
+    items = await site.directCategoryVideos(categoryId, page: page);
+    lists.put(key, items);
+    return items;
   }
 
   Future<VideoDetail> video(String viewkey, {bool forceRefresh = false}) async {
@@ -237,6 +296,28 @@ class PhApi {
 
   Future<void> invalidateVideo(String viewkey) async {
     await _cache?.invalidate(viewkey);
+  }
+
+  /// Fetch a freshly signed thumbnail URL for one video (stored thumbs
+  /// are signed URLs that expire after 24h). Used when a favorite's
+  /// cover fails to load. Returns '' when no thumb could be fetched.
+  Future<String> refreshThumb(String viewkey) async {
+    if (usesBackend) {
+      try {
+        final data = await _getBackendJson(
+          '/api/video_by_id?id=${Uri.encodeQueryComponent(viewkey)}',
+        );
+        // The backend returns the cleaned video dict itself.
+        return VideoItem.fromJson(data).thumb;
+      } on ApiException {
+        // Fall through to direct parsing below.
+      }
+    }
+    try {
+      return await direct.directVideoThumb(viewkey);
+    } on direct.ParseException {
+      return '';
+    }
   }
 
   /// Cheap liveness check for the Settings "test connection" button.

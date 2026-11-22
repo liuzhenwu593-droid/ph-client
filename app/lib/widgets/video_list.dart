@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import 'thumb_image.dart';
 
 /// One video row: thumbnail (16:9) + title + duration/views/rating.
 /// [isFavorite]/[onToggleFavorite] add the star button; when they are
-/// null no star is shown.
+/// null no star is shown. [onRefreshThumb] is called once when a cover
+/// fails to load (favorites use it to fetch a fresh signed thumb URL).
 class VideoCard extends StatelessWidget {
   const VideoCard({
     super.key,
@@ -12,12 +14,14 @@ class VideoCard extends StatelessWidget {
     required this.onTap,
     this.isFavorite,
     this.onToggleFavorite,
+    this.onRefreshThumb,
   });
 
   final VideoItem video;
   final VoidCallback onTap;
   final bool? isFavorite;
   final VoidCallback? onToggleFavorite;
+  final Future<String?> Function(VideoItem video)? onRefreshThumb;
 
   @override
   Widget build(BuildContext context) {
@@ -33,15 +37,14 @@ class VideoCard extends StatelessWidget {
               children: [
                 AspectRatio(
                   aspectRatio: 16 / 9,
-                  child: video.thumb.isEmpty
-                      ? Container(color: Colors.grey.shade900)
-                      : Image.network(
-                          video.thumb,
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          errorBuilder: (_, _, _) =>
-                              Container(color: Colors.grey.shade900),
-                        ),
+                  child: ThumbImage(
+                    url: video.thumb,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    onRefreshUrl: onRefreshThumb == null
+                        ? null
+                        : () => onRefreshThumb!(video),
+                  ),
                 ),
                 if (video.duration.isNotEmpty)
                   Positioned(
@@ -127,6 +130,7 @@ class VideoListView extends StatelessWidget {
     required this.onOpen,
     this.isFavorite,
     this.onToggleFavorite,
+    this.onRefreshThumb,
   });
 
   final List<VideoItem> videos;
@@ -138,6 +142,7 @@ class VideoListView extends StatelessWidget {
   final void Function(VideoItem video) onOpen;
   final bool Function(VideoItem video)? isFavorite;
   final void Function(VideoItem video)? onToggleFavorite;
+  final Future<String?> Function(VideoItem video)? onRefreshThumb;
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +183,15 @@ class VideoListView extends StatelessWidget {
             );
           }
           final video = videos[index];
+          // Prefetch the next few covers so scrolling shows them instantly.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (context.mounted) {
+              precacheThumbs(
+                context,
+                videos.skip(index + 1).take(3).map((v) => v.thumb),
+              );
+            }
+          });
           return VideoCard(
             video: video,
             onTap: () => onOpen(video),
@@ -185,6 +199,7 @@ class VideoListView extends StatelessWidget {
             onToggleFavorite: onToggleFavorite == null
                 ? null
                 : () => onToggleFavorite!(video),
+            onRefreshThumb: onRefreshThumb,
           );
         },
       ),

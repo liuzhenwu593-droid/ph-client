@@ -7,6 +7,7 @@ import '../local_store.dart';
 import '../models.dart';
 import '../ph_api.dart';
 import '../settings.dart';
+import '../widgets/thumb_image.dart';
 import 'player_page.dart';
 
 /// Download manager: progress, cancel, play offline, delete.
@@ -93,13 +94,12 @@ class DownloadsPage extends StatelessWidget {
                       ? const Icon(Icons.video_library, size: 40)
                       : ClipRRect(
                           borderRadius: BorderRadius.circular(4),
-                          child: Image.network(
-                            item.thumb,
+                          child: ThumbImage(
+                            url: item.thumb,
                             width: 72,
                             height: 40,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.video_library, size: 40),
+                            compact: true,
                           ),
                         ),
                   title: Text(

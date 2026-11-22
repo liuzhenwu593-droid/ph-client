@@ -5,7 +5,6 @@ import 'local_store.dart';
 import 'pages/categories_page.dart';
 import 'pages/favorites_page.dart';
 import 'pages/home_page.dart';
-import 'pages/pin_page.dart';
 import 'pages/search_page.dart';
 import 'pages/settings_page.dart';
 import 'ph_api.dart';
@@ -59,23 +58,13 @@ class _PhPlayerAppState extends State<PhPlayerApp> {
     backendUrl: widget.settings.backendUrl,
     cache: widget.cache,
   );
-  bool _pinUnlocked = false;
+  // v0.2.1: the PIN app lock was removed entirely (it was buggy).
+  // Only the 18+ gate below remains; there is no PIN state here anymore.
 
   @override
   Widget build(BuildContext context) {
     final Widget home;
-    if (widget.settings.pinEnabled && !_pinUnlocked) {
-      home = PinScreen(
-        mode: PinMode.verify,
-        title: '输入 PIN 进入 PsexHub',
-        hint: '忘记 PIN 只能卸载重装清除。',
-        onSubmit: (pin) async {
-          final ok = widget.settings.checkPin(pin);
-          if (ok) setState(() => _pinUnlocked = true);
-          return ok;
-        },
-      );
-    } else if (!widget.settings.ageConfirmed) {
+    if (!widget.settings.ageConfirmed) {
       home = AgeGateScreen(
         settings: widget.settings,
         api: _api,

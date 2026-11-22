@@ -72,6 +72,12 @@ class FavoritesPage extends StatelessWidget {
                   onTap: () => _open(context, video),
                   isFavorite: true,
                   onToggleFavorite: () => favorites.toggle(video),
+                  onRefreshThumb: (v) async {
+                    final fresh = await api.refreshThumb(v.viewkey);
+                    if (fresh.isEmpty) return null;
+                    await favorites.updateThumb(v.viewkey, fresh);
+                    return fresh;
+                  },
                 ),
               ),
             const SizedBox(height: 16),

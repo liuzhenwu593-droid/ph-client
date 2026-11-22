@@ -38,11 +38,25 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _load(reset: true);
+    // Within 5 minutes of the last load, show the cached list at once
+    // and refresh silently in the background instead of spinning.
+    // (v0.2.1: the "继续观看" row was removed; resume still works from
+    // the player itself, and resume points are still saved.)
+    final cached = widget.api.peekHome(page: 1);
+    if (cached != null) {
+      _videos.addAll(cached);
+      _load(reset: true, background: true);
+    } else {
+      _load(reset: true);
+    }
   }
 
-  Future<void> _load({required bool reset}) async {
-    if (reset) {
+  Future<void> _load({
+    required bool reset,
+    bool background = false,
+    bool forceRefresh = false,
+  }) async {
+    if (reset && !background) {
       setState(() {
         _isLoading = true;
         _error = null;
@@ -51,7 +65,13 @@ class _HomePageState extends State<HomePage> {
     }
     try {
       final page = reset ? 1 : _page + 1;
-      final items = await widget.api.home(page: page);
+      // A background refresh must actually fetch: api.home() returns the
+      // cached list unless forceRefresh is set, so a silent refresh with
+      // forceRefresh: false would be a no-op.
+      final items = await widget.api.home(
+        page: page,
+        forceRefresh: forceRefresh || background,
+      );
       if (!mounted) return;
       setState(() {
         if (reset) {
@@ -68,7 +88,8 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _isLoading = false;
         _isLoadingMore = false;
-        _error = '加载失败：$e';
+        // A failed background refresh must not wipe the cached list.
+        if (!background) _error = '加载失败：$e';
       });
     }
   }
@@ -102,126 +123,20 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([widget.favorites, widget.watch]),
+      listenable: widget.favorites,
       builder: (context, _) {
-        final resume = widget.watch.continueWatching;
-        return Column(
-          children: [
-            if (resume.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '继续观看',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              SizedBox(
-                height: 132,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: resume.length,
-                  itemBuilder: (context, index) {
-                    final entry = resume[index];
-                    return _ResumeCard(
-                      entry: entry,
-                      onTap: () => _open(entry.video),
-                    );
-                  },
-                ),
-              ),
-              const Divider(height: 1),
-            ],
-            Expanded(
-              child: VideoListView(
-                videos: _videos,
-                isLoading: _isLoading,
-                error: _error,
-                onRefresh: () => _load(reset: true),
-                onLoadMore: _loadMore,
-                hasMore: _error == null,
-                onOpen: _open,
-                isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
-                onToggleFavorite: _toggleFavorite,
-              ),
-            ),
-          ],
+        return VideoListView(
+          videos: _videos,
+          isLoading: _isLoading,
+          error: _error,
+          onRefresh: () => _load(reset: true, forceRefresh: true),
+          onLoadMore: _loadMore,
+          hasMore: _error == null,
+          onOpen: _open,
+          isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
+          onToggleFavorite: _toggleFavorite,
         );
       },
-    );
-  }
-}
-
-class _ResumeCard extends StatelessWidget {
-  const _ResumeCard({required this.entry, required this.onTap});
-
-  final WatchEntry entry;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 200,
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-        child: InkWell(
-          onTap: onTap,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Stack(
-                children: [
-                  AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: entry.video.thumb.isEmpty
-                        ? Container(color: Colors.grey.shade900)
-                        : Image.network(
-                            entry.video.thumb,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            errorBuilder: (_, _, _) =>
-                                Container(color: Colors.grey.shade900),
-                          ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: LinearProgressIndicator(
-                      value: entry.progress,
-                      minHeight: 3,
-                      backgroundColor: Colors.black45,
-                      valueColor: const AlwaysStoppedAnimation<Color>(
-                        Colors.redAccent,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                child: Text(
-                  entry.video.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Text(
-                  '上次看到 ${entry.positionLabel}',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

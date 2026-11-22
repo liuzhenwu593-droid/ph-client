@@ -167,7 +167,7 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
     _load(reset: true);
   }
 
-  Future<void> _load({required bool reset}) async {
+  Future<void> _load({required bool reset, bool forceRefresh = false}) async {
     if (reset) {
       setState(() {
         _isLoading = true;
@@ -180,6 +180,7 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
       final items = await widget.api.categoryVideos(
         widget.category.id,
         page: page,
+        forceRefresh: forceRefresh,
       );
       if (!mounted) return;
       setState(() {
@@ -230,7 +231,7 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
           videos: _videos,
           isLoading: _isLoading,
           error: _error,
-          onRefresh: () => _load(reset: true),
+          onRefresh: () => _load(reset: true, forceRefresh: true),
           onLoadMore: _loadMore,
           hasMore: _error == null,
           onOpen: _open,

@@ -5,7 +5,6 @@ import '../local_store.dart';
 import '../ph_api.dart';
 import '../settings.dart';
 import 'downloads_page.dart';
-import 'pin_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
@@ -74,57 +73,6 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  Future<void> _setPin() async {
-    final done = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => PinScreen(
-          mode: PinMode.set,
-          title: '设置 4 位 PIN',
-          hint: '冷启动进 App 时需要输入。只存 PIN 的 SHA256，不存明文。',
-          onSet: (pin) => widget.settings.setPin(pin),
-        ),
-      ),
-    );
-    if (done == true && mounted) {
-      setState(() {});
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('应用锁已开启')));
-    }
-  }
-
-  Future<void> _changePin() async {
-    final verified = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => PinScreen(
-          mode: PinMode.verify,
-          title: '输入当前 PIN',
-          onSubmit: (pin) async => widget.settings.checkPin(pin),
-        ),
-      ),
-    );
-    if (verified == true && mounted) _setPin();
-  }
-
-  Future<void> _disablePin() async {
-    final verified = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => PinScreen(
-          mode: PinMode.verify,
-          title: '输入当前 PIN 关闭应用锁',
-          onSubmit: (pin) async => widget.settings.checkPin(pin),
-        ),
-      ),
-    );
-    if (verified == true) {
-      await widget.settings.clearPin();
-      if (mounted) {
-        setState(() {});
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('应用锁已关闭')));
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -150,39 +98,6 @@ class _SettingsPageState extends State<SettingsPage> {
               },
             );
           }).toList(),
-        ),
-        const Divider(height: 32),
-        const Text(
-          '应用锁',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          widget.settings.pinEnabled
-              ? '已开启：冷启动进 App 时要先输 4 位 PIN。'
-              : '未开启：可设 4 位 PIN，冷启动进 App 时先验证。',
-        ),
-        const Text(
-          'PIN 只存 SHA256，不存明文。忘记 PIN 只能卸载重装清除（会清空收藏、历史和下载）。',
-          style: TextStyle(color: Colors.grey),
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            if (!widget.settings.pinEnabled)
-              FilledButton(onPressed: _setPin, child: const Text('设置 PIN'))
-            else ...[
-              OutlinedButton(
-                onPressed: _changePin,
-                child: const Text('更改 PIN'),
-              ),
-              const SizedBox(width: 12),
-              OutlinedButton(
-                onPressed: _disablePin,
-                child: const Text('关闭应用锁'),
-              ),
-            ],
-          ],
         ),
         const Divider(height: 32),
         ListTile(

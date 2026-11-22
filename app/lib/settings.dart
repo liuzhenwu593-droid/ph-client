@@ -1,10 +1,7 @@
-/// Settings store: 18+ gate + optional backend URL + player prefs + app PIN.
+/// Settings store: 18+ gate + optional backend URL + player prefs.
 /// Kept separate so pages never touch SharedPreferences directly.
 library;
 
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppSettings {
@@ -14,13 +11,16 @@ class AppSettings {
   static const _ageKey = 'age_confirmed';
   static const _backendKey = 'backend_url';
   static const _seekSecondsKey = 'seek_seconds';
-  static const _pinHashKey = 'pin_hash';
 
   /// Double-tap seek step choices offered in Settings.
   static const seekOptions = [5, 10, 15, 30];
 
   static Future<AppSettings> load() async {
-    return AppSettings._(await SharedPreferences.getInstance());
+    final prefs = await SharedPreferences.getInstance();
+    // v0.2.1: the PIN app lock was removed entirely. A PIN hash stored by
+    // v0.2.0 must never be able to lock anyone out again, so drop it here.
+    await prefs.remove('pin_hash');
+    return AppSettings._(prefs);
   }
 
   bool get ageConfirmed => _prefs.getBool(_ageKey) ?? false;
@@ -42,30 +42,5 @@ class AppSettings {
   Future<void> setSeekSeconds(int seconds) async {
     if (!seekOptions.contains(seconds)) return;
     await _prefs.setInt(_seekSecondsKey, seconds);
-  }
-
-  // ---- App PIN lock ----
-  //
-  // Only the SHA-256 of the PIN is stored, never the PIN itself.
-  // There is no recovery: forgetting the PIN means uninstalling and
-  // reinstalling the app (the stored hash is wiped with the app data).
-  // This is a casual privacy lock, not security-grade protection.
-
-  static String hashPin(String pin) {
-    return sha256.convert(utf8.encode('psexhub-pin:$pin')).toString();
-  }
-
-  String get pinHash => _prefs.getString(_pinHashKey) ?? '';
-
-  bool get pinEnabled => pinHash.isNotEmpty;
-
-  bool checkPin(String pin) => pinEnabled && hashPin(pin) == pinHash;
-
-  Future<void> setPin(String pin) async {
-    await _prefs.setString(_pinHashKey, hashPin(pin));
-  }
-
-  Future<void> clearPin() async {
-    await _prefs.remove(_pinHashKey);
   }
 }

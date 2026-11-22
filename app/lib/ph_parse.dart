@@ -11,8 +11,10 @@
 ///   master.m3u8 URLs. Pornhub randomly serves two HLS URL schemes:
 ///   ev-h.phncdn.com (?validfrom&hash) works, hv-h.phncdn.com (?h= token)
 ///   returns 410 Gone under every header combination tried. So this
-///   parser re-fetches until the top HLS URL verifies with a real
-///   playlist GET (~235 bytes), up to 5 attempts.
+///   parser re-fetches until the start HLS URL verifies with a real
+///   playlist GET (~235 bytes): v0.2.1 runs 2 parallel rounds of 5
+///   fetches (ev-h share per fetch is only ~20-40% now, so 5 sequential
+///   attempts failed ~17-33% of videos).
 /// - Signed HLS URLs expire 2h after issue; never cache them across
 ///   launches. No login, no account, no download in this app.
 ///   (v0.2: PlaybackCache in play_cache.dart keeps them up to 110 minutes
@@ -89,6 +91,22 @@ Future<List<VideoItem>> directSearch(
       .whereType<Map<String, dynamic>>()
       .map(VideoItem.fromJson)
       .toList();
+}
+
+/// Webmasters detail for one video: metadata only, no playable URL.
+/// Used to refresh a stored thumbnail whose signed URL expired (24h):
+/// the returned thumb is freshly signed. Throws [ParseException] when
+/// the video is missing.
+Future<String> directVideoThumb(String viewkey) async {
+  final url =
+      '$_base/webmasters/video_by_id?id=${Uri.encodeComponent(viewkey)}';
+  final body = await _getString(url);
+  final data = jsonDecode(body);
+  if (data is! Map || data['video'] is! Map<String, dynamic>) {
+    throw ParseException('no video in video_by_id for $viewkey');
+  }
+  final video = VideoItem.fromJson(data['video'] as Map<String, dynamic>);
+  return video.thumb;
 }
 
 /// Extract the `var flashvars_<n> = {...};` object with a balanced-brace
@@ -195,27 +213,42 @@ List<VideoSource> _sourcesFromFlashvars(Map<String, dynamic> flashvars) {
 /// and the user can upgrade to 1080p afterwards. All qualities from one
 /// fetch share the same CDN host (verified live 2026-11-22), so verifying
 /// the start URL validates the whole set.
-/// Throws [ParseException] if no verifiable URL appears in 5 attempts.
+///
+/// v0.2.1: attempts run in PARALLEL rounds. The ev-h share per fetch has
+/// dropped to roughly 20-40% (it was ~50% when v0.1 was measured), so 5
+/// sequential attempts fail ~17-33% of videos — and each costs a ~1.6 MB
+/// detail fetch (~1.8s) plus delays. Two rounds of 5 concurrent fetches
+/// (10 attempts total) cut the failure rate to ~3-11% and a round takes
+/// ~2s instead of ~9s sequential. The ev-h-only rule is unchanged:
+/// hv-h URLs are never returned.
+/// Throws [ParseException] if no verifiable URL appears.
 Future<VideoDetail> directVideoSources(
   String viewkey, {
-  int maxAttempts = 5,
+  int maxAttempts = 10,
 }) async {
-  ParseException? lastError;
-  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-    Map<String, dynamic> flashvars;
-    try {
-      final html = await _getString(
-        '$_base/view_video.php?viewkey=${Uri.encodeComponent(viewkey)}',
-      );
-      flashvars = extractFlashvars(html);
-    } on ParseException catch (e) {
-      lastError = e;
-      if (attempt < maxAttempts) {
-        await Future<void>.delayed(const Duration(seconds: 1));
-        continue;
-      }
-      rethrow;
+  const perRound = 5;
+  final rounds = (maxAttempts / perRound).ceil();
+  for (var round = 0; round < rounds; round++) {
+    final results = await Future.wait(
+      List.generate(perRound, (_) => _tryOneFetch(viewkey)),
+    );
+    for (final detail in results) {
+      if (detail != null) return detail;
     }
+  }
+  throw ParseException(
+    'no verifiable HLS URL after $maxAttempts attempts '
+    '(ev-h share is only ~20-40% per fetch)',
+  );
+}
+
+/// One fetch-and-verify attempt. Never throws: null means "try again".
+Future<VideoDetail?> _tryOneFetch(String viewkey) async {
+  try {
+    final html = await _getString(
+      '$_base/view_video.php?viewkey=${Uri.encodeComponent(viewkey)}',
+    );
+    final flashvars = extractFlashvars(html);
     final sources = _sourcesFromFlashvars(flashvars);
     final detail = VideoDetail(
       viewkey: viewkey,
@@ -230,15 +263,8 @@ Future<VideoDetail> directVideoSources(
     if (start != null && await _verifyHls(start.url, viewkey)) {
       return detail;
     }
-    lastError = ParseException(
-      'attempt $attempt: start HLS URL did not verify '
-      '(host=${start != null ? Uri.parse(start.url).host : 'none'})',
-    );
-    if (attempt < maxAttempts) {
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-    }
+    return null;
+  } catch (_) {
+    return null;
   }
-  throw ParseException(
-    'no verifiable HLS URL after $maxAttempts attempts: $lastError',
-  );
 }

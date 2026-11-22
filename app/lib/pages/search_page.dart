@@ -82,7 +82,7 @@ class _SearchPageState extends State<SearchPage> {
     super.dispose();
   }
 
-  Future<void> _search(String query) async {
+  Future<void> _search(String query, {bool forceRefresh = false}) async {
     final q = query.trim();
     if (q.isEmpty) return;
     await widget.searchHistory.add(q);
@@ -94,15 +94,16 @@ class _SearchPageState extends State<SearchPage> {
       _searched = true;
       _videos.clear();
     });
-    await _loadPage(1);
+    await _loadPage(1, forceRefresh: forceRefresh);
   }
 
-  Future<void> _loadPage(int page) async {
+  Future<void> _loadPage(int page, {bool forceRefresh = false}) async {
     try {
       final items = await widget.api.search(
         _query,
         page: page,
         ordering: _ordering,
+        forceRefresh: forceRefresh,
       );
       if (!mounted) return;
       setState(() {
@@ -242,7 +243,7 @@ class _SearchPageState extends State<SearchPage> {
                   videos: _videos,
                   isLoading: _isLoading,
                   error: _error,
-                  onRefresh: () => _search(_query),
+                  onRefresh: () => _search(_query, forceRefresh: true),
                   onLoadMore: _loadMore,
                   hasMore: _error == null,
                   onOpen: _open,

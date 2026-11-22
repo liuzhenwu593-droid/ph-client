@@ -52,6 +52,32 @@ class FavoritesStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replace a stored favorite's thumbnail URL (a stored thumb is a
+  /// signed URL that expires after 24h; a fresh one is fetched on demand
+  /// when the old cover fails to load). Returns false when the video
+  /// is not in favorites.
+  Future<bool> updateThumb(String viewkey, String thumb) async {
+    final index = _items.indexWhere((v) => v.viewkey == viewkey);
+    if (index < 0 || thumb.isEmpty) return false;
+    final old = _items[index];
+    if (old.thumb == thumb) return true;
+    _items[index] = VideoItem(
+      viewkey: old.viewkey,
+      title: old.title,
+      duration: old.duration,
+      views: old.views,
+      rating: old.rating,
+      thumb: thumb,
+      url: old.url,
+      publishDate: old.publishDate,
+      tags: old.tags,
+      categories: old.categories,
+    );
+    await _persist();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> _persist() async {
     await _prefs.setStringList(
       _key,
