@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
-import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../proxy_client.dart';
 
@@ -37,7 +37,7 @@ final CacheManager _thumbCacheManager = CacheManager(
     stalePeriod: const Duration(days: 7),
     maxNrOfCacheObjects: 200,
     fileService: HttpFileService(
-      httpClient: http.IOClient(ProxyHttp.newClient()),
+      httpClient: IOClient(ProxyHttp.newClient()),
     ),
   ),
 );

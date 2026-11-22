@@ -22,7 +22,8 @@ android {
         // sing-box libbox only ships arm ABIs in our trimmed AAR
         // (arm64-v8a + armeabi-v7a); drop the rest at packaging time.
         ndk {
-            abiFilters("arm64-v8a", "armeabi-v7a")
+            abiFilters += "arm64-v8a"
+            abiFilters += "armeabi-v7a"
         }
     }
 
