@@ -173,6 +173,105 @@ def _extract_flashvars(html):
         raise ParseError(f"flashvars JSON unparsable: {exc}") from exc
 
 
+def _unescape_html(s):
+    return (
+        s.replace("&amp;", "&")
+        .replace("&quot;", '"')
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#39;", "'")
+    )
+
+
+def _parse_views(raw):
+    """'2.2M' -> 2200000, '179K' -> 179000, '1,234' -> 1234."""
+    s = raw.strip().replace(",", "")
+    if not s:
+        return 0
+    m = re.match(r"^([\d.]+)\s*([KM])?$", s)
+    if not m:
+        try:
+            return int(s)
+        except ValueError:
+            return 0
+    value = float(m.group(1))
+    if m.group(2) == "M":
+        return round(value * 1000000)
+    if m.group(2) == "K":
+        return round(value * 1000)
+    return round(value)
+
+
+def parse_site_list(html):
+    """Parse the #videoCategory list out of a /video listing page.
+
+    Verified live 2026-11-22: /video?c=37 returns 30 items, page=2 works.
+    Only the <ul id="videoCategory"> section is parsed — the header
+    dropdown menus contain the same item markup and must be excluded.
+    No rating is shown in the list, so rating is 0 for these items."""
+    start = html.find('<ul id="videoCategory"')
+    if start < 0:
+        raise ParseError("videoCategory list not found")
+    end = html.find("</ul>", start)
+    if end < 0:
+        raise ParseError("videoCategory list not closed")
+    section = html[start:end]
+    videos = []
+    for block in re.findall(r'<li class="pcVideoListItem.*?</li>', section, re.S):
+        m = re.search(r'data-video-vkey="([0-9a-f]+)"', block)
+        if not m:
+            continue
+        vkey = m.group(1)
+        title_m = re.search(
+            r'<span class="title">\s*<a[^>]*>(.*?)</a>', block, re.S
+        )
+        title = (
+            _unescape_html(re.sub(r"<[^>]*>", "", title_m.group(1)).strip())
+            if title_m
+            else ""
+        )
+        if not title:
+            continue
+        thumb_m = re.search(r'(?:src|data-mediumthumb)="(https://[^"]*phncdn[^"]*)"', block)
+        thumb = thumb_m.group(1) if thumb_m else ""
+        dur_m = re.search(r'<var class="duration">([^<]+)</var>', block)
+        duration = dur_m.group(1).strip() if dur_m else ""
+        views_m = re.search(r'<span class="views"><var>([^<]+)</var>', block)
+        views = _parse_views(views_m.group(1)) if views_m else 0
+        videos.append(
+            {
+                "viewkey": vkey,
+                "title": title,
+                "duration": duration,
+                "views": views,
+                "rating": 0,
+                "thumb": thumb,
+                "url": BASE + "/view_video.php?viewkey=" + vkey,
+                "publish_date": "",
+                "tags": [],
+                "categories": [],
+                "pornstars": [],
+            }
+        )
+    if not videos:
+        raise ParseError("no videos parsed from site list")
+    return videos
+
+
+def category_videos(category_id, page=1):
+    """Videos inside one category (site page /video?c=<id>)."""
+    url = BASE + "/video?c=" + urllib.parse.quote(str(category_id)) + f"&page={page}"
+    status, body = _get(url)
+    if status != 200:
+        raise ParseError(f"category page HTTP {status} for {category_id}")
+    return {
+        "videos": parse_site_list(body.decode("utf-8", errors="ignore")),
+        "page": page,
+    }
+
+
 def _verify_hls(url, viewkey):
     """GET the HLS master playlist (~235 bytes). Returns True only if the
     CDN answers 200 with a real playlist. This is the gate that keeps dead
@@ -219,6 +318,21 @@ def _fetch_sources_once(viewkey):
     return flashvars, sources
 
 
+def _start_candidate(sources):
+    """Fast-start pick (v0.2): the lowest HLS quality that is still >= 480p
+    (usually 480p itself). All qualities from one detail-page fetch share
+    the same CDN host (verified live 2026-11-22: all four are either ev-h
+    or hv-h together), so verifying this one URL validates the whole set
+    and the player can upgrade to 1080p afterwards without re-verifying."""
+    hls = [s for s in sources if s.get("format") == "hls" and s.get("url")]
+    if not hls:
+        return None
+    at_least_480 = [s for s in hls if (s.get("height") or 0) >= 480]
+    if at_least_480:
+        return min(at_least_480, key=lambda s: s.get("height") or 0)
+    return min(hls, key=lambda s: s.get("height") or 0)
+
+
 def video_sources(viewkey, max_attempts=5):
     """Fetch the detail page and return playable sources.
 
@@ -236,9 +350,11 @@ def video_sources(viewkey, max_attempts=5):
       headers incl. Origin+Referer, session cookies). Possibly the new
       scheme needs a real browser's TLS fingerprint or a JS-set cookie;
       it may still play in ExoPlayer on a phone — unproven, so v1 treats
-      it as dead. Each attempt re-fetches the detail page until the top
-      HLS URL verifies with a real playlist GET (only ~235 bytes).
+      it as dead. Each attempt re-fetches the detail page until the
+      *start* HLS URL verifies with a real playlist GET (only ~235 bytes).
       5 attempts ~= 97% success at 50% per attempt.
+      v0.2: only the start candidate (480p) is verified, not the 1080p
+      top URL — the player starts at 480p and upgrades afterwards.
     """
     last_error = None
     for attempt in range(1, max_attempts + 1):
@@ -256,8 +372,8 @@ def video_sources(viewkey, max_attempts=5):
                 -(s["height"] or 0),
             )
         )
-        hls = [s for s in sources if s["format"] == "hls"]
-        if hls and _verify_hls(hls[0]["url"], viewkey):
+        start = _start_candidate(sources)
+        if start and _verify_hls(start["url"], viewkey):
             return {
                 "viewkey": viewkey,
                 "title": flashvars.get("video_title", ""),
@@ -266,8 +382,8 @@ def video_sources(viewkey, max_attempts=5):
                 "sources": sources,
             }
         last_error = ParseError(
-            f"attempt {attempt}: HLS URL did not verify "
-            f"(host={hls[0]['url'].split('/')[2] if hls else 'none'})"
+            f"attempt {attempt}: start HLS URL did not verify "
+            f"(host={start['url'].split('/')[2] if start else 'none'})"
         )
         if attempt < max_attempts:
             time.sleep(1.5)

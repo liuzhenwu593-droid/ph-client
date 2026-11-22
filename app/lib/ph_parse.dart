@@ -15,6 +15,10 @@
 ///   playlist GET (~235 bytes), up to 5 attempts.
 /// - Signed HLS URLs expire 2h after issue; never cache them across
 ///   launches. No login, no account, no download in this app.
+///   (v0.2: PlaybackCache in play_cache.dart keeps them up to 110 minutes
+///   — inside the 2h validity — so replays skip the network entirely.)
+/// - Fast-start (v0.2): the player starts at the lowest HLS >= 480p and
+///   only that URL is verified per attempt; see directVideoSources.
 ///
 /// Pure Dart (dart:io / dart:convert only) so it can be tested with a
 /// standalone Dart SDK: see README.md.
@@ -45,13 +49,13 @@ Future<String> _getString(
 }) async {
   final client = HttpClient();
   try {
-    final request = await client
-        .getUrl(Uri.parse(url))
-        .timeout(timeout);
+    final request = await client.getUrl(Uri.parse(url)).timeout(timeout);
     request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-    request.headers.set(HttpHeaders.cookieHeader,
-        'age_verified=1; accessAgeDisclaimerPH=1; '
-        'accessAgeDisclaimerUK=1; accessPH=1');
+    request.headers.set(
+      HttpHeaders.cookieHeader,
+      'age_verified=1; accessAgeDisclaimerPH=1; '
+      'accessAgeDisclaimerUK=1; accessPH=1',
+    );
     extraHeaders?.forEach(request.headers.set);
     final response = await request.close().timeout(timeout);
     final body = await response.transform(utf8.decoder).join().timeout(timeout);
@@ -135,8 +139,10 @@ Future<bool> _verifyHls(String url, String viewkey) async {
         .getUrl(Uri.parse(url))
         .timeout(const Duration(seconds: 15));
     request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
-    request.headers.set(HttpHeaders.refererHeader,
-        '$_base/view_video.php?viewkey=$viewkey');
+    request.headers.set(
+      HttpHeaders.refererHeader,
+      '$_base/view_video.php?viewkey=$viewkey',
+    );
     request.headers.set('Origin', _base);
     final response = await request.close().timeout(const Duration(seconds: 15));
     if (response.statusCode != HttpStatus.ok) return false;
@@ -162,14 +168,16 @@ List<VideoSource> _sourcesFromFlashvars(Map<String, dynamic> flashvars) {
     if (item is! Map<String, dynamic>) continue;
     final videoUrl = (item['videoUrl'] ?? '').toString();
     if (videoUrl.isEmpty) continue;
-    sources.add(VideoSource(
-      quality: (item['quality'] ?? '').toString(),
-      format: (item['format'] ?? '').toString(),
-      url: videoUrl,
-      width: item['width'] is num ? (item['width'] as num).toInt() : 0,
-      height: item['height'] is num ? (item['height'] as num).toInt() : 0,
-      isDefault: item['defaultQuality'] == true,
-    ));
+    sources.add(
+      VideoSource(
+        quality: (item['quality'] ?? '').toString(),
+        format: (item['format'] ?? '').toString(),
+        url: videoUrl,
+        width: item['width'] is num ? (item['width'] as num).toInt() : 0,
+        height: item['height'] is num ? (item['height'] as num).toInt() : 0,
+        isDefault: item['defaultQuality'] == true,
+      ),
+    );
   }
   sources.sort((a, b) {
     final formatOrder =
@@ -180,8 +188,13 @@ List<VideoSource> _sourcesFromFlashvars(Map<String, dynamic> flashvars) {
   return sources;
 }
 
-/// Fetch detail page and return playable sources, retrying until the top
-/// HLS URL verifies (see file header for the ev-h / hv-h finding).
+/// Fetch detail page and return playable sources, retrying until the
+/// *start* HLS URL verifies (see file header for the ev-h / hv-h finding).
+/// v0.2 fast-start: only the start candidate (lowest HLS >= 480p, usually
+/// 480p) is verified, not the 1080p top URL — the player starts at 480p
+/// and the user can upgrade to 1080p afterwards. All qualities from one
+/// fetch share the same CDN host (verified live 2026-11-22), so verifying
+/// the start URL validates the whole set.
 /// Throws [ParseException] if no verifiable URL appears in 5 attempts.
 Future<VideoDetail> directVideoSources(
   String viewkey, {
@@ -192,7 +205,8 @@ Future<VideoDetail> directVideoSources(
     Map<String, dynamic> flashvars;
     try {
       final html = await _getString(
-          '$_base/view_video.php?viewkey=${Uri.encodeComponent(viewkey)}');
+        '$_base/view_video.php?viewkey=${Uri.encodeComponent(viewkey)}',
+      );
       flashvars = extractFlashvars(html);
     } on ParseException catch (e) {
       lastError = e;
@@ -203,25 +217,28 @@ Future<VideoDetail> directVideoSources(
       rethrow;
     }
     final sources = _sourcesFromFlashvars(flashvars);
-    final hls = sources.where((s) => s.format == 'hls').toList();
-    if (hls.isNotEmpty && await _verifyHls(hls.first.url, viewkey)) {
-      return VideoDetail(
-        viewkey: viewkey,
-        title: (flashvars['video_title'] ?? '').toString(),
-        duration: flashvars['video_duration'] is num
-            ? (flashvars['video_duration'] as num).toInt()
-            : 0,
-        thumb: (flashvars['image_url'] ?? '').toString(),
-        sources: sources,
-      );
+    final detail = VideoDetail(
+      viewkey: viewkey,
+      title: (flashvars['video_title'] ?? '').toString(),
+      duration: flashvars['video_duration'] is num
+          ? (flashvars['video_duration'] as num).toInt()
+          : 0,
+      thumb: (flashvars['image_url'] ?? '').toString(),
+      sources: sources,
+    );
+    final start = detail.startSource;
+    if (start != null && await _verifyHls(start.url, viewkey)) {
+      return detail;
     }
     lastError = ParseException(
-        'attempt $attempt: HLS URL did not verify '
-        '(host=${hls.isNotEmpty ? Uri.parse(hls.first.url).host : 'none'})');
+      'attempt $attempt: start HLS URL did not verify '
+      '(host=${start != null ? Uri.parse(start.url).host : 'none'})',
+    );
     if (attempt < maxAttempts) {
       await Future<void>.delayed(const Duration(milliseconds: 1500));
     }
   }
   throw ParseException(
-      'no verifiable HLS URL after $maxAttempts attempts: $lastError');
+    'no verifiable HLS URL after $maxAttempts attempts: $lastError',
+  );
 }

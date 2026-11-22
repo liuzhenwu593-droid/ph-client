@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../downloads.dart';
+import '../local_store.dart';
 import '../ph_api.dart';
 import '../settings.dart';
+import 'downloads_page.dart';
+import 'pin_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
@@ -9,19 +13,26 @@ class SettingsPage extends StatefulWidget {
     required this.settings,
     required this.api,
     required this.onBackendChanged,
+    required this.favorites,
+    required this.watch,
+    required this.downloads,
   });
 
   final AppSettings settings;
   final PhApi api;
   final void Function(String url) onBackendChanged;
+  final FavoritesStore favorites;
+  final WatchStore watch;
+  final DownloadManager downloads;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.settings.backendUrl);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.settings.backendUrl,
+  );
   String? _testResult;
   bool _testing = false;
 
@@ -39,9 +50,7 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => _testResult = null);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          url.isEmpty ? '已切换为 App 内嵌解析（无需后端）' : '后端地址已保存：$url',
-        ),
+        content: Text(url.isEmpty ? '已切换为 App 内嵌解析（无需后端）' : '后端地址已保存：$url'),
       ),
     );
   }
@@ -65,11 +74,138 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
+  Future<void> _setPin() async {
+    final done = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PinScreen(
+          mode: PinMode.set,
+          title: '设置 4 位 PIN',
+          hint: '冷启动进 App 时需要输入。只存 PIN 的 SHA256，不存明文。',
+          onSet: (pin) => widget.settings.setPin(pin),
+        ),
+      ),
+    );
+    if (done == true && mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('应用锁已开启')));
+    }
+  }
+
+  Future<void> _changePin() async {
+    final verified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PinScreen(
+          mode: PinMode.verify,
+          title: '输入当前 PIN',
+          onSubmit: (pin) async => widget.settings.checkPin(pin),
+        ),
+      ),
+    );
+    if (verified == true && mounted) _setPin();
+  }
+
+  Future<void> _disablePin() async {
+    final verified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => PinScreen(
+          mode: PinMode.verify,
+          title: '输入当前 PIN 关闭应用锁',
+          onSubmit: (pin) async => widget.settings.checkPin(pin),
+        ),
+      ),
+    );
+    if (verified == true) {
+      await widget.settings.clearPin();
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('应用锁已关闭')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const Text(
+          '双击快进秒数',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        const Text('播放时双击左/右半屏快退/快进的时间。'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: AppSettings.seekOptions.map((seconds) {
+            final selected = widget.settings.seekSeconds == seconds;
+            return ChoiceChip(
+              label: Text('$seconds 秒'),
+              selected: selected,
+              onSelected: (_) async {
+                await widget.settings.setSeekSeconds(seconds);
+                if (mounted) setState(() {});
+              },
+            );
+          }).toList(),
+        ),
+        const Divider(height: 32),
+        const Text(
+          '应用锁',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          widget.settings.pinEnabled
+              ? '已开启：冷启动进 App 时要先输 4 位 PIN。'
+              : '未开启：可设 4 位 PIN，冷启动进 App 时先验证。',
+        ),
+        const Text(
+          'PIN 只存 SHA256，不存明文。忘记 PIN 只能卸载重装清除（会清空收藏、历史和下载）。',
+          style: TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            if (!widget.settings.pinEnabled)
+              FilledButton(onPressed: _setPin, child: const Text('设置 PIN'))
+            else ...[
+              OutlinedButton(
+                onPressed: _changePin,
+                child: const Text('更改 PIN'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton(
+                onPressed: _disablePin,
+                child: const Text('关闭应用锁'),
+              ),
+            ],
+          ],
+        ),
+        const Divider(height: 32),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.download),
+          title: const Text('我的下载'),
+          subtitle: const Text('离线视频管理：播放、删除'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => DownloadsPage(
+                  api: widget.api,
+                  favorites: widget.favorites,
+                  watch: widget.watch,
+                  settings: widget.settings,
+                  downloads: widget.downloads,
+                ),
+              ),
+            );
+          },
+        ),
+        const Divider(height: 32),
         const Text(
           '后端地址',
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
@@ -110,10 +246,10 @@ class _SettingsPageState extends State<SettingsPage> {
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: 8),
-        const Text('PH Player 0.1.0（最小版）'),
-        const Text('功能：首页、搜索、播放。不登录、不下载、不收藏。'),
+        const Text('PsexHub 0.2.0'),
+        const Text('功能：首页、分类、搜索、收藏、离线下载、续播、播放器手势与倍速。'),
+        const Text('不登录。视频地址 2 小时过期，每次播放都重新获取；重复打开 110 分钟内直接用缓存。'),
         const Text('首次打开需确认已满 18 岁。'),
-        const Text('视频地址 2 小时过期，每次播放都重新获取。'),
       ],
     );
   }

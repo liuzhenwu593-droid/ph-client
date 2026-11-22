@@ -1,7 +1,7 @@
 name: ph_player
-description: "PH Player — minimal third-party video client: Home + Search + Play. No login, no download."
+description: "PsexHub — third-party video client: home, categories, search, favorites, offline downloads, resume."
 publish_to: "none"
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
   sdk: ^3.9.0
@@ -13,6 +13,12 @@ dependencies:
   # HLS (m3u8) playback on Android is ExoPlayer under the hood.
   video_player: ^2.9.5
   shared_preferences: ^2.3.2
+  # Swipe left side = screen brightness (real system brightness).
+  screen_brightness: ^2.1.0
+  # Offline downloads are stored in the app's documents directory.
+  path_provider: ^2.1.0
+  # App PIN lock stores only the SHA-256 of the PIN.
+  crypto: ^3.0.0
 
 dev_dependencies:
   flutter_test:

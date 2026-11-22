@@ -1,4 +1,4 @@
-name: Build PH Player APK
+name: Build PsexHub APK
 # NOTE: Flutter project is in app/; this workflow lives at repo root so GitHub runs it.
 
 on:
@@ -60,7 +60,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ci-latest
-          name: "CI 最新构建（PH Player 最小版）"
+          name: "CI 最新构建（PsexHub 0.2.0）"
           prerelease: true
           files: app/build/app/outputs/flutter-apk/*.apk
           fail_on_unmatched_files: false
@@ -149,7 +149,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ci-latest
-          name: "CI 最新构建（PH Player 最小版）"
+          name: "CI 最新构建（PsexHub 0.2.0）"
           prerelease: true
           files: app/build/app/outputs/flutter-apk/*.apk
           fail_on_unmatched_files: false

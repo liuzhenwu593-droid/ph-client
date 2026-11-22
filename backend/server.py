@@ -11,6 +11,7 @@ Endpoints (all JSON, CORS open for the app):
   GET /api/home?page=1             -> most-viewed this week (Webmasters)
   GET /api/search?q=...&page=1     -> Webmasters search, 30/page
   GET /api/categories              -> Webmasters category list
+  GET /api/category?id=37&page=1   -> videos in one category (site list)
   GET /api/video?viewkey=...       -> metadata + playable HLS sources
   GET /api/video_by_id?id=...     -> metadata only
 
@@ -94,6 +95,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, ph_parse.search(q, page, ordering, period))
             elif path == "/api/categories":
                 self._send(200, ph_parse.categories())
+            elif path == "/api/category":
+                cid = qs.get("id", [""])[0]
+                if not cid:
+                    self._send(400, {"error": "missing id"})
+                    return
+                page = self._int(qs, "page", 1)
+                self._send(200, ph_parse.category_videos(cid, page))
             elif path == "/api/video_by_id":
                 viewkey = qs.get("id", [""])[0]
                 if not viewkey:

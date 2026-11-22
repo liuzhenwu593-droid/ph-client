@@ -1,10 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 列表、搜索、视频流全部走网络；不做下载、不存账号。 -->
+    <!-- 列表、搜索、视频流全部走网络；离线下载存到 App 专属目录，不存账号。 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
-        android:label="PH Player"
+        android:label="PsexHub"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:hardwareAccelerated="true">

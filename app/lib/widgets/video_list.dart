@@ -3,11 +3,21 @@ import 'package:flutter/material.dart';
 import '../models.dart';
 
 /// One video row: thumbnail (16:9) + title + duration/views/rating.
+/// [isFavorite]/[onToggleFavorite] add the star button; when they are
+/// null no star is shown.
 class VideoCard extends StatelessWidget {
-  const VideoCard({super.key, required this.video, required this.onTap});
+  const VideoCard({
+    super.key,
+    required this.video,
+    required this.onTap,
+    this.isFavorite,
+    this.onToggleFavorite,
+  });
 
   final VideoItem video;
   final VoidCallback onTap;
+  final bool? isFavorite;
+  final VoidCallback? onToggleFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -39,7 +49,9 @@ class VideoCard extends StatelessWidget {
                     bottom: 8,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 2),
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.black87,
                         borderRadius: BorderRadius.circular(4),
@@ -47,8 +59,27 @@ class VideoCard extends StatelessWidget {
                       child: Text(
                         video.duration,
                         style: const TextStyle(
-                            color: Colors.white, fontSize: 12),
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
                       ),
+                    ),
+                  ),
+                if (isFavorite != null && onToggleFavorite != null)
+                  Positioned(
+                    right: 4,
+                    top: 4,
+                    child: IconButton(
+                      icon: Icon(
+                        isFavorite! ? Icons.star : Icons.star_border,
+                        color: isFavorite! ? Colors.amber : Colors.white,
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black45,
+                        padding: EdgeInsets.zero,
+                      ),
+                      onPressed: onToggleFavorite,
+                      tooltip: isFavorite! ? '取消收藏' : '收藏',
                     ),
                   ),
               ],
@@ -94,6 +125,8 @@ class VideoListView extends StatelessWidget {
     required this.onLoadMore,
     required this.hasMore,
     required this.onOpen,
+    this.isFavorite,
+    this.onToggleFavorite,
   });
 
   final List<VideoItem> videos;
@@ -103,6 +136,8 @@ class VideoListView extends StatelessWidget {
   final VoidCallback onLoadMore;
   final bool hasMore;
   final void Function(VideoItem video) onOpen;
+  final bool Function(VideoItem video)? isFavorite;
+  final void Function(VideoItem video)? onToggleFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -117,10 +152,7 @@ class VideoListView extends StatelessWidget {
               const SizedBox(height: 12),
               Text(error!, textAlign: TextAlign.center),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: onRefresh,
-                child: const Text('重试'),
-              ),
+              FilledButton(onPressed: onRefresh, child: const Text('重试')),
             ],
           ),
         ),
@@ -149,6 +181,10 @@ class VideoListView extends StatelessWidget {
           return VideoCard(
             video: video,
             onTap: () => onOpen(video),
+            isFavorite: isFavorite == null ? null : isFavorite!(video),
+            onToggleFavorite: onToggleFavorite == null
+                ? null
+                : () => onToggleFavorite!(video),
           );
         },
       ),

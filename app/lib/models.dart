@@ -19,7 +19,12 @@ class VideoItem {
     List<String> strings(dynamic value) {
       if (value is List) {
         return value
-            .map((e) => e is Map ? (e['tag_name'] ?? e['category'] ?? e['pornstar_name'] ?? '').toString() : e.toString())
+            .map(
+              (e) => e is Map
+                  ? (e['tag_name'] ?? e['category'] ?? e['pornstar_name'] ?? '')
+                        .toString()
+                  : e.toString(),
+            )
             .where((s) => s.isNotEmpty)
             .toList();
       }
@@ -51,8 +56,33 @@ class VideoItem {
   final List<String> tags;
   final List<String> categories;
 
+  Map<String, dynamic> toJson() => {
+    'viewkey': viewkey,
+    'title': title,
+    'duration': duration,
+    'views': views,
+    'rating': rating,
+    'thumb': thumb,
+    'url': url,
+    'publish_date': publishDate,
+    'tags': tags,
+    'categories': categories,
+  };
+
+  /// "7:24" -> 444, "1:02:03" -> 3723. Used by the duration filter.
+  int get durationSeconds {
+    final parts = duration.split(':').map(int.tryParse).toList();
+    if (parts.isEmpty || parts.any((p) => p == null)) return 0;
+    var total = 0;
+    for (final p in parts) {
+      total = total * 60 + p!;
+    }
+    return total;
+  }
+
   String get viewsLabel {
-    if (views >= 1000000) return '${(views / 1000000).toStringAsFixed(1)}M views';
+    if (views >= 1000000)
+      return '${(views / 1000000).toStringAsFixed(1)}M views';
     if (views >= 1000) return '${(views / 1000).toStringAsFixed(1)}K views';
     return '$views views';
   }
@@ -86,6 +116,15 @@ class VideoSource {
   final int height;
   final bool isDefault;
 
+  Map<String, dynamic> toJson() => {
+    'quality': quality,
+    'format': format,
+    'url': url,
+    'width': width,
+    'height': height,
+    'default': isDefault,
+  };
+
   String get label => quality.isEmpty ? format.toUpperCase() : '${quality}p';
 }
 
@@ -103,7 +142,8 @@ class VideoDetail {
     final sources = <VideoSource>[];
     if (raw is List) {
       for (final item in raw) {
-        if (item is Map<String, dynamic>) sources.add(VideoSource.fromJson(item));
+        if (item is Map<String, dynamic>)
+          sources.add(VideoSource.fromJson(item));
       }
     }
     return VideoDetail(
@@ -123,6 +163,14 @@ class VideoDetail {
   final String thumb;
   final List<VideoSource> sources;
 
+  Map<String, dynamic> toJson() => {
+    'viewkey': viewkey,
+    'title': title,
+    'duration': duration,
+    'thumb': thumb,
+    'sources': sources.map((s) => s.toJson()).toList(),
+  };
+
   /// HLS first, highest quality first — same order the backend returns.
   List<VideoSource> get hlsSources =>
       sources.where((s) => s.format == 'hls' && s.url.isNotEmpty).toList();
@@ -133,10 +181,46 @@ class VideoDetail {
     return hls.first;
   }
 
+  /// Fast-start source: the lowest HLS quality that is still >= 480p
+  /// (usually 480p itself). All qualities from one detail-page fetch share
+  /// the same CDN host (verified live 2026-11-22: all four qualities are
+  /// either ev-h or hv-h together), so verifying this one URL validates
+  /// the whole set and the player can upgrade to 1080p later for free.
+  /// Falls back to the lowest available HLS quality when nothing is >= 480p.
+  VideoSource? get startSource {
+    final hls = hlsSources;
+    if (hls.isEmpty) return bestSource;
+    final atLeast480 = hls.where((s) => s.height >= 480).toList();
+    if (atLeast480.isNotEmpty) {
+      atLeast480.sort((a, b) => a.height.compareTo(b.height));
+      return atLeast480.first;
+    }
+    final sorted = List<VideoSource>.from(hls)
+      ..sort((a, b) => a.height.compareTo(b.height));
+    return sorted.first;
+  }
+
   String get durationLabel {
     if (duration <= 0) return '';
     final m = duration ~/ 60;
     final s = duration % 60;
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
+}
+
+/// One category from the Webmasters category list (243 entries).
+/// The id is what the site's /video?c=<id> pages use.
+class CategoryItem {
+  const CategoryItem({required this.id, required this.name});
+
+  factory CategoryItem.fromJson(Map<String, dynamic> json) {
+    final rawId = json['id'];
+    return CategoryItem(
+      id: rawId is num ? rawId.toInt() : int.tryParse('$rawId') ?? 0,
+      name: (json['category'] ?? json['name'] ?? '').toString(),
+    );
+  }
+
+  final int id;
+  final String name;
 }
