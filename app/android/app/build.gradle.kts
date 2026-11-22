@@ -18,6 +18,12 @@ android {
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // sing-box libbox only ships arm ABIs in our trimmed AAR
+        // (arm64-v8a + armeabi-v7a); drop the rest at packaging time.
+        ndk {
+            abiFilters("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
@@ -67,4 +73,9 @@ flutter {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+
+    // sing-box core (libbox) for the in-app proxy (v0.2.5). The AAR is
+    // trimmed to arm64-v8a + armeabi-v7a only (see libs/); it is the same
+    // libbox build the shadiao app uses — no node data inside, just the core.
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
 }

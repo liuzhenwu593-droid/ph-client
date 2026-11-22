@@ -26,6 +26,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'models.dart';
+import 'proxy_client.dart';
 
 const String _base = 'https://www.pornhub.com';
 const String _userAgent =
@@ -33,7 +34,8 @@ const String _userAgent =
     'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
 Future<String> _getHtml(String url) async {
-  final client = HttpClient();
+  // v0.2.5: routed through ProxyHttp like everything else.
+  final client = ProxyHttp.newClient();
   try {
     final request = await client
         .getUrl(Uri.parse(url))
@@ -54,6 +56,10 @@ Future<String> _getHtml(String url) async {
       throw ParseException('HTTP ${response.statusCode} from $url');
     }
     return body;
+  } on ParseException {
+    rethrow;
+  } catch (e) {
+    throw ParseException(ProxyHttp.wrapError(e));
   } finally {
     client.close();
   }
@@ -160,7 +166,7 @@ Future<List<VideoItem>> directCategoryVideos(
 /// Category list (Webmasters JSON, 243 entries). Same source the backend
 /// /api/categories uses.
 Future<List<CategoryItem>> directCategories() async {
-  final client = HttpClient();
+  final client = ProxyHttp.newClient();
   try {
     final request = await client
         .getUrl(Uri.parse('$_base/webmasters/categories'))
@@ -188,6 +194,10 @@ Future<List<CategoryItem>> directCategories() async {
         .map(CategoryItem.fromJson)
         .where((c) => c.id != 0 && c.name.isNotEmpty)
         .toList();
+  } on ParseException {
+    rethrow;
+  } catch (e) {
+    throw ParseException(ProxyHttp.wrapError(e));
   } finally {
     client.close();
   }

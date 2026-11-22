@@ -10,6 +10,8 @@ import '../downloads.dart';
 import '../local_store.dart';
 import '../models.dart';
 import '../ph_api.dart';
+import '../proxy_client.dart';
+import '../proxy_relay.dart';
 import '../settings.dart';
 import '../widgets/video_list.dart';
 
@@ -150,7 +152,12 @@ class _PlayerPageState extends State<PlayerPage> {
             await widget.api.invalidateVideo(widget.video.viewkey);
             await _load(fresh: true);
           } else {
-            setState(() => _error = '播放器启动失败，请重试');
+            setState(
+              () => _error = ProxyHttp.enabled
+                  ? '代理连接失败：播放器连不上本地代理，'
+                      '请检查节点是否在线，或关闭代理后重试'
+                  : '播放器启动失败，请重试',
+            );
           }
         }
       } else {
@@ -194,10 +201,20 @@ class _PlayerPageState extends State<PlayerPage> {
     File? file,
     required Duration startAt,
   }) async {
+    // v0.2.5: ExoPlayer has no proxy setting, so when the in-app proxy
+    // is on, the HLS playlist goes through the loopback relay (which
+    // fetches it via the node). The relay URL keeps the .m3u8 extension
+    // so ExoPlayer still detects HLS.
+    final playUrl = file == null && ProxyHttp.enabled
+        ? ProxyRelay.instance.mediaUrl(
+            source!.url,
+            viewkey: widget.video.viewkey,
+          )
+        : source?.url;
     final controller = file != null
         ? VideoPlayerController.file(file)
         : VideoPlayerController.networkUrl(
-            Uri.parse(source!.url),
+            Uri.parse(playUrl!),
             httpHeaders: _headers,
           );
     controller.addListener(_onTick);

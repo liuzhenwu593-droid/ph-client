@@ -10,6 +10,7 @@ import 'pages/search_page.dart';
 import 'pages/settings_page.dart';
 import 'ph_api.dart';
 import 'play_cache.dart';
+import 'proxy_manager.dart';
 import 'settings.dart';
 import 'widgets/grid_toggle.dart';
 
@@ -21,6 +22,9 @@ void main() async {
   final watch = await WatchStore.load();
   final searchHistory = await SearchHistoryStore.load();
   final downloads = await DownloadManager.load();
+  // In-app proxy (v0.2.5): loads nodes + switch; if the switch was left
+  // on, the service starts in the background.
+  await ProxyManager.load();
   runApp(
     PhPlayerApp(
       settings: settings,

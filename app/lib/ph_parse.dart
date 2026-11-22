@@ -32,6 +32,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'models.dart';
+import 'proxy_client.dart';
 
 const String _base = 'https://www.pornhub.com';
 const String _userAgent =
@@ -51,7 +52,11 @@ Future<String> _getString(
   String? userAgent,
   Duration timeout = const Duration(seconds: 30),
 }) async {
-  final client = HttpClient();
+  // v0.2.5: all traffic goes through ProxyHttp — direct when the proxy
+  // switch is off, via the local sing-box mixed inbound when on. A
+  // proxy failure surfaces as a proxy error, never a silent direct
+  // fallback (see ProxyHttp).
+  final client = ProxyHttp.newClient(timeout: timeout);
   try {
     final request = await client.getUrl(Uri.parse(url)).timeout(timeout);
     request.headers.set(HttpHeaders.userAgentHeader, userAgent ?? _userAgent);
@@ -67,6 +72,10 @@ Future<String> _getString(
       throw ParseException('HTTP ${response.statusCode} from $url');
     }
     return body;
+  } on ParseException {
+    rethrow;
+  } catch (e) {
+    throw ParseException(ProxyHttp.wrapError(e));
   } finally {
     client.close();
   }
@@ -153,7 +162,7 @@ Map<String, dynamic> extractFlashvars(String html) {
 }
 
 Future<bool> _verifyHls(String url, String viewkey) async {
-  final client = HttpClient();
+  final client = ProxyHttp.newClient(timeout: const Duration(seconds: 15));
   try {
     final request = await client
         .getUrl(Uri.parse(url))
@@ -239,8 +248,11 @@ Future<VideoDetail> directVideoSources(
     }
   }
   throw ParseException(
-    'no verifiable HLS URL after $maxAttempts attempts '
-    '(ev-h share is only ~20-40% per fetch)',
+    ProxyHttp.enabled
+        ? '代理连接失败：10 次尝试都拿不到可播放地址，节点可能离线，'
+            '请检查节点或关闭代理后重试'
+        : 'no verifiable HLS URL after $maxAttempts attempts '
+            '(ev-h share is only ~20-40% per fetch)',
   );
 }
 

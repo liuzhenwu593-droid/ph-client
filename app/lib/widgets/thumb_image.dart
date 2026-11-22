@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:http/http.dart' as http;
+
+import '../proxy_client.dart';
 
 /// Headers every phncdn thumbnail request must carry.
 ///
@@ -24,11 +27,18 @@ const _thumbHeaders = <String, String>{
 /// Thumbnail disk cache: 7 days, max 200 files. The bytes are cached, not
 /// the signed URL — a thumb URL's 24h signature only gates the download,
 /// so a cached image stays valid after its URL expires.
+///
+/// v0.2.5: the file service runs on a dart:io client whose findProxy
+/// reads the live proxy switch, so thumbnails follow the proxy toggle
+/// without rebuilding the cache manager.
 final CacheManager _thumbCacheManager = CacheManager(
   Config(
     'phThumbs',
     stalePeriod: const Duration(days: 7),
     maxNrOfCacheObjects: 200,
+    fileService: HttpFileService(
+      httpClient: http.IOClient(ProxyHttp.newClient()),
+    ),
   ),
 );
 

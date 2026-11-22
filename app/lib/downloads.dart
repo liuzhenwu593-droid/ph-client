@@ -28,6 +28,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
+import 'proxy_client.dart';
 
 const String _base = 'https://www.pornhub.com';
 const String _userAgent =
@@ -400,7 +401,8 @@ class DownloadManager extends ChangeNotifier {
   }
 
   Future<String> _getText(String url, {required String referer}) async {
-    final client = HttpClient();
+    // v0.2.5: downloads go through the proxy when it is on.
+    final client = ProxyHttp.newClient();
     try {
       final request = await client
           .getUrl(Uri.parse(url))
@@ -430,7 +432,9 @@ class DownloadManager extends ChangeNotifier {
     File file, {
     required String referer,
   }) async {
-    final client = HttpClient();
+    final client = ProxyHttp.newClient(
+      timeout: const Duration(seconds: 60),
+    );
     try {
       final request = await client
           .getUrl(Uri.parse(url))
