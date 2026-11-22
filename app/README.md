@@ -1,0 +1,55 @@
+# PH Player — 最小版（首页 + 搜索 + 播放）
+
+第三方视频客户端最小版。不登录、不下载、不收藏。18+  gate 在首次打开时出现。
+
+## 架构：后端优先，内嵌解析兜底
+
+```
+App ──(1)──> 后端 ph-parser（设置里填地址后）──> Pornhub
+ │            解析失败 / 未配置时自动回落
+ └──(2)──> App 内嵌解析 lib/ph_parse.dart ──> Pornhub（直连）
+```
+
+- **装上就能播**：默认不填后端地址，App 直接用内嵌解析（`lib/ph_parse.dart`，
+  与后端 `backend/ph_parse.py` 同款逻辑的 Dart 版），不需要用户搭服务器。
+- **后端的作用**：Pornhub 改版后只改后端、不用重新发 App 包。后端部署见
+  `../backend/README.md`（默认方案：Cloady，和 Xray 同一个免费 workspace；
+  部署需要用户在 Cloady 点几下，因为登录是邮箱验证码）。
+- 后端地址填在 App 的设置页里，保存后立即生效；后端连不上时自动回落内嵌解析。
+
+## 解析（2026-11-22 实测结论）
+
+- 列表/搜索：Webmasters 接口 `GET /webmasters/search`，200，每页 30 条 JSON，
+  有标题/时长/播放量/评分/标签/分类/封面，无直链。
+- 播放：详情页 `view_video.php?viewkey=` 的 `flashvars.mediaDefinitions`，
+  240/480/720/1080 四档 HLS（m3u8）。签名地址 2 小时过期，每次播放重新获取。
+- **ev-h / hv-h 双方案**：同一视频随机返回两种 HLS 地址（约各 50%）。
+  `ev-h.phncdn.com ?validfrom&hash` 能播（master.m3u8 200）；
+  `hv-h.phncdn.com ?h=<token>` 在沙盒里用尽各种请求头都返回 410 Gone。
+  因此解析器会重取详情页直到拿到可验证的地址（最多 5 次，约 97% 成功），
+  并且只返回经过 master.m3u8 实测 200 的地址。hv-h 在真机 ExoPlayer 里
+  是否能播尚未验证——手机测试时要留意：如果某视频反复加载失败，大概率
+  是连续抽到 hv-h，重试即可；若 ExoPlayer 能播 hv-h，后续可放宽校验。
+- `/video/get_media` 的 mp4 路线目前返回 `[]`，已死；不要按老教程抄它。
+- 同一个签名地址用 IPv4 和 IPv6 两种出口 IP 都返回 200，说明地址不绑定
+  请求 IP——后端签发的地址手机上也能播（最终仍需真机验证）。
+
+## 本地开发
+
+```bash
+flutter pub get
+flutter analyze
+flutter run            # 需要真机或模拟器；本 VM 没有 Android SDK，不能本地打包
+```
+
+CI（`.github/workflows/build.yml`）：每次 push 到 main 跑 analyze + debug APK，
+并发布到滚动 release `ci-latest`；配置好签名 Secrets 后额外打 signed release
+包。签名密钥必须新生成、只放 GitHub Secrets，绝不要提交 keystore 文件，
+也不要复用其他 App 的密钥。
+
+## 待真机验证（APK 出来后）
+
+1. 首页加载、搜索、点播是否出画面（重点看 hv-h 视频在 ExoPlayer 里表现）。
+2. 清晰度切换是否不断流、能否续播。
+3. 填后端地址后是否优先走后端、后端挂了是否回落内嵌解析。
+4. 退出重进后 18+ gate 不再出现。

@@ -1,0 +1,5 @@
+# No dependencies: server.py + ph_parse.py use only the Python standard
+# library (http.server, urllib, json). This file exists so deploy targets
+# that expect a requirements.txt find one, and so the zero-dependency
+# property is explicit and stays that way on purpose.
+# (Intentionally empty — do not add requests/fastapi here without a reason.)

@@ -1,0 +1,6 @@
+name = "ph-parser"
+main = "worker.js"
+compatibility_date = "2026-11-22"
+
+# Free tier: 100k requests/day. UNTESTED alternative — see worker.js header
+# and backend/README.md before using. Default deploy target is Cloady.

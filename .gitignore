@@ -1,0 +1,10 @@
+# Signing material must never be committed.
+*.jks
+*.keystore
+**/keystore.properties
+# Python bytecode / caches
+__pycache__/
+*.pyc
+# Editor / OS
+.DS_Store
+.idea/

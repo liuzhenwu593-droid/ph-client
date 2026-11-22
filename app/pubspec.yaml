@@ -1,0 +1,23 @@
+name: ph_player
+description: "PH Player — minimal third-party video client: Home + Search + Play. No login, no download."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+  flutter: ">=3.35.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # HLS (m3u8) playback on Android is ExoPlayer under the hood.
+  video_player: ^2.9.5
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
