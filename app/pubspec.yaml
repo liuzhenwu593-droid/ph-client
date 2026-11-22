@@ -20,6 +20,7 @@ dependencies:
   # Thumbnails: disk cache + browser headers (phncdn 403s Referer-less
   # requests on pix-cdn77, ~half of all thumbs — verified live 2026-11-22).
   cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1
 
 dev_dependencies:
   flutter_test:

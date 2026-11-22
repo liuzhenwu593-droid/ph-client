@@ -146,7 +146,7 @@ class PhApi {
       final cached = lists.peek(key);
       if (cached != null) return cached;
     }
-    final List<VideoItem> items;
+    List<VideoItem> items;
     if (usesBackend) {
       try {
         items = _videosFrom(await _getBackendJson('/api/home?page=$page'));
@@ -250,7 +250,7 @@ class PhApi {
       final cached = lists.peek(key);
       if (cached != null) return cached;
     }
-    final List<VideoItem> items;
+    List<VideoItem> items;
     if (usesBackend) {
       try {
         items = _videosFrom(
