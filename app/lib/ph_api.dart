@@ -9,13 +9,19 @@
 /// the master playlist GETs 200), so the app can trust backend sources
 /// without re-verifying them.
 ///
-/// Search ordering (verified live 2026-11-22): the Webmasters API only
-/// honours ordering=mostviewed; toprated/mostrecent/longest all return
-/// the same unsorted default list. So "评分最高" and "最新" are sorted
-/// client-side below (by rating / publish date) after the fetch — the
-/// sort applies to the loaded page, not the whole catalogue.
-/// Duration and HD: the API returns no duration filter and no HD flag
-/// (neither search nor video_by_id), so duration is filtered client-side
+/// Search ordering (v0.2.4): search now parses the mobile website's own
+/// search page first, so results and order match what the user sees on
+/// the mobile site. The site honours all four sort modes server-side
+/// via its `o=` param (mv/tr/mr/lg — verified live 2026-11-22), so no
+/// client-side sort is needed for site results. The Webmasters API is
+/// kept only as a fallback when the site fetch fails or the page layout
+/// changes — and the API only honours ordering=mostviewed, so fallback
+/// results (and backend results, which are Webmasters-backed) are still
+/// sorted client-side below (by rating / publish date / duration) after
+/// the fetch; the sort applies to the loaded page, not the whole
+/// catalogue.
+/// Duration and HD: neither the site page nor the API returns a
+/// duration filter or an HD flag, so duration is filtered client-side
 /// from the "M:SS" string and there is deliberately no HD toggle.
 ///
 /// Pure Dart (dart:io / dart:convert only).
@@ -72,6 +78,22 @@ extension SearchOrderingApi on SearchOrdering {
         return 'mostrecent';
       case SearchOrdering.longest:
         return 'longest';
+    }
+  }
+
+  /// The mobile site's own sort param (search page `o=`), verified live
+  /// 2026-11-22: each value gives a different order of 28 cards, and
+  /// o=lg durations are strictly descending.
+  String get siteValue {
+    switch (this) {
+      case SearchOrdering.mostViewed:
+        return 'mv';
+      case SearchOrdering.topRated:
+        return 'tr';
+      case SearchOrdering.mostRecent:
+        return 'mr';
+      case SearchOrdering.longest:
+        return 'lg';
     }
   }
 }
@@ -175,11 +197,14 @@ class PhApi {
     bool forceRefresh = false,
   }) async {
     final key = 'search:$query:${ordering.apiValue}:$page';
-    List<VideoItem> items;
     if (!forceRefresh) {
       final cached = lists.peek(key);
-      if (cached != null) return _sortedSearch(cached, ordering);
+      // Cached pages are stored in display order (site order, or
+      // client-sorted for API/backend results), so they are returned
+      // as-is — no re-sort on cache hits.
+      if (cached != null) return cached;
     }
+    List<VideoItem> items;
     if (usesBackend) {
       try {
         final encoded = Uri.encodeQueryComponent(query);
@@ -188,22 +213,62 @@ class PhApi {
             '/api/search?q=$encoded&page=$page&ordering=${ordering.apiValue}',
           ),
         );
+        // The backend is Webmasters-backed, and the API only honours
+        // mostviewed server-side — sort client-side like the fallback.
+        items = _sortedSearch(items, ordering);
       } on ApiException {
-        items = await direct.directSearch(
+        items = await _siteSearchOrApi(
           query,
           page: page,
-          ordering: ordering.apiValue,
+          ordering: ordering,
         );
       }
     } else {
-      items = await direct.directSearch(
-        query,
-        page: page,
-        ordering: ordering.apiValue,
-      );
+      items = await _siteSearchOrApi(query, page: page, ordering: ordering);
     }
     lists.put(key, items);
-    // Client-side sort: the API only honours mostviewed server-side.
+    return items;
+  }
+
+  /// Site search first (same videos and order as the mobile site), with
+  /// the Webmasters API as fallback so search never dies when the site
+  /// fetch fails or the page layout changes. The API returns a different
+  /// video set (overlap 0/30 for the same query, verified live), so the
+  /// fallback is a safety net, not an equivalent. Site results are
+  /// already server-sorted; API results are client-sorted. The preview
+  /// clip map from the site fetch is stored in the preview cache, so
+  /// the search page's preview fetch is served from cache instead of
+  /// fetching the same page a second time.
+  Future<List<VideoItem>> _siteSearchOrApi(
+    String query, {
+    required int page,
+    required SearchOrdering ordering,
+  }) async {
+    try {
+      final result = await direct.directSiteSearch(
+        query,
+        page: page,
+        ordering: ordering.siteValue,
+      );
+      if (result.videos.isNotEmpty) {
+        _previewCache[_previewKey(
+          query: query,
+          ordering: ordering.siteValue,
+          page: page,
+        )] = _PreviewEntry(
+          fetchedAt: DateTime.now().millisecondsSinceEpoch,
+          urls: result.previews,
+        );
+        return result.videos;
+      }
+    } on direct.ParseException {
+      // Fall through to the API fallback below.
+    }
+    final items = await direct.directSearch(
+      query,
+      page: page,
+      ordering: ordering.apiValue,
+    );
     return _sortedSearch(items, ordering);
   }
 
@@ -311,12 +376,27 @@ class PhApi {
   /// map just means "no previews for this list" and the covers stay.
   final Map<String, _PreviewEntry> _previewCache = {};
 
+  /// Preview-cache key. [ordering] is the site sort value (mv/tr/mr/lg)
+  /// so a sorted search page does not reuse another sort's clip map.
+  String _previewKey({
+    String? query,
+    int? categoryId,
+    int page = 1,
+    String? ordering,
+  }) => 'preview:${query ?? ''}:${categoryId ?? ''}:$page:${ordering ?? ''}';
+
   Future<Map<String, String>> previewUrls({
     String? query,
     int? categoryId,
     int page = 1,
+    String? ordering,
   }) async {
-    final key = 'preview:${query ?? ''}:${categoryId ?? ''}:$page';
+    final key = _previewKey(
+      query: query,
+      categoryId: categoryId,
+      page: page,
+      ordering: ordering,
+    );
     final entry = _previewCache[key];
     if (entry != null &&
         DateTime.now().millisecondsSinceEpoch - entry.fetchedAt <
@@ -327,6 +407,7 @@ class PhApi {
       query: query,
       categoryId: categoryId,
       page: page,
+      ordering: ordering,
     );
     _previewCache[key] = _PreviewEntry(
       fetchedAt: DateTime.now().millisecondsSinceEpoch,

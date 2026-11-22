@@ -8,9 +8,9 @@ import '../settings.dart';
 import '../widgets/video_list.dart';
 import 'player_page.dart';
 
-/// Duration buckets for the search filter (client-side: the Webmasters
-/// API has no duration parameter, so the loaded page is filtered locally
-/// by the "M:SS" duration string).
+/// Duration buckets for the search filter (client-side: neither the
+/// site search page nor the Webmasters API has a duration parameter, so
+/// the loaded page is filtered locally by the "M:SS" duration string).
 enum DurationFilter { all, short, medium, long }
 
 extension on DurationFilter {
@@ -129,6 +129,7 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final urls = await widget.api.previewUrls(
         query: _query,
+        ordering: _ordering.siteValue,
         page: page,
       );
       if (!mounted || urls.isEmpty) return;

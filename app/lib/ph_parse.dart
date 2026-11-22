@@ -294,10 +294,19 @@ const String _mobileUserAgent =
 
 /// Mobile list-page URL matching a list the app shows: search, category,
 /// or the home feed (most-viewed, weekly — same as the Webmasters home).
-String mobileListUrl({String? query, int? categoryId, int page = 1}) {
+/// [ordering] is the site's own sort value for search (`o=` param:
+/// mv/tr/mr/lg — see directSiteSearch); null means the site default.
+String mobileListUrl({
+  String? query,
+  int? categoryId,
+  int page = 1,
+  String? ordering,
+}) {
   if (query != null && query.isNotEmpty) {
-    return '$_base/video/search?search=${Uri.encodeQueryComponent(query)}'
+    var url = '$_base/video/search?search=${Uri.encodeQueryComponent(query)}'
         '&page=$page';
+    if (ordering != null && ordering.isNotEmpty) url += '&o=$ordering';
+    return url;
   }
   if (categoryId != null) {
     return '$_base/video?c=$categoryId&page=$page';
@@ -317,6 +326,7 @@ Future<Map<String, String>> directPreviewUrls({
   String? query,
   int? categoryId,
   int page = 1,
+  String? ordering,
 }) async {
   // One retry: the site intermittently answers the first request with a
   // 302/empty body (seen live in the sandbox 2026-11-22) and the retry
@@ -324,7 +334,12 @@ Future<Map<String, String>> directPreviewUrls({
   for (var attempt = 0; attempt < 2; attempt++) {
     try {
       final html = await _getString(
-        mobileListUrl(query: query, categoryId: categoryId, page: page),
+        mobileListUrl(
+          query: query,
+          categoryId: categoryId,
+          page: page,
+          ordering: ordering,
+        ),
         userAgent: _mobileUserAgent,
         extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
       );
@@ -360,6 +375,189 @@ Future<Map<String, String>> directPreviewUrls({
     }
   }
   return {};
+}
+
+/// One parsed mobile search page (v0.2.4): the videos in site order plus
+/// the per-card preview clip URLs from the same fetch, so search results
+/// and previews come from one request instead of two.
+class SiteSearchPage {
+  const SiteSearchPage({required this.videos, required this.previews});
+  final List<VideoItem> videos;
+  final Map<String, String> previews;
+}
+
+String _unescapeHtml(String s) {
+  return s
+      .replaceAll('&amp;', '&')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#039;', "'")
+      .replaceAll('&apos;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&#39;', "'");
+}
+
+/// "121K" -> 121000, "2.2M" -> 2200000, "1,234" -> 1234.
+int _parseSiteViews(String raw) {
+  final s = raw.trim().replaceAll(',', '');
+  if (s.isEmpty) return 0;
+  final m = RegExp(r'^([\d.]+)\s*([KM])?$').firstMatch(s);
+  if (m == null) return int.tryParse(s) ?? 0;
+  final value = double.tryParse(m.group(1)!) ?? 0;
+  final suffix = m.group(2);
+  if (suffix == 'M') return (value * 1000000).round();
+  if (suffix == 'K') return (value * 1000).round();
+  return value.round();
+}
+
+/// Extract the <ul id="videoListSearchResults"> ... </ul> section with a
+/// balanced scan: cards contain nested <ul> menus, so the first </ul>
+/// after the opening tag is NOT the end of the list.
+String _searchResultsSection(String html) {
+  final open =
+      RegExp(r'<ul[^>]*id="videoListSearchResults"[^>]*>').firstMatch(html);
+  if (open == null) {
+    throw ParseException('videoListSearchResults not found');
+  }
+  var depth = 0;
+  final tagRe = RegExp(r'</?ul\b[^>]*>');
+  for (final m in tagRe.allMatches(html, open.start)) {
+    if (m.group(0)!.startsWith('</')) {
+      depth--;
+    } else {
+      depth++;
+    }
+    if (depth == 0) return html.substring(open.start, m.end);
+  }
+  throw ParseException('videoListSearchResults not closed');
+}
+
+/// Parse the main result list out of a mobile search page. Returns the
+/// videos in site order. Only <li class="videoSearchList_*"> cards are
+/// taken — the same <ul> also carries shorties and ad slots, which are
+/// not results. Throws [ParseException] when the page layout is not
+/// recognised or no video cards are found.
+SiteSearchPage parseSiteSearch(String html) {
+  final section = _searchResultsSection(html);
+  final itemRe = RegExp(
+    r'<li\b[^>]*class="[^"]*videoSearchList[^"]*"[^>]*>.*?</li>',
+    dotAll: true,
+  );
+  final videos = <VideoItem>[];
+  final previews = <String, String>{};
+  for (final match in itemRe.allMatches(section)) {
+    final block = match.group(0)!;
+    // NOTE: the viewkey is [0-9a-z]+, not [0-9a-f]+ — many cards carry
+    // a "ph..."-prefixed viewkey (verified live), which a hex-only
+    // pattern silently drops (that bug cost o=mv 20 of 28 cards in an
+    // early probe). The detail page accepts ph viewkeys (200 +
+    // mediaDefinitions, verified live).
+    final vkey =
+        RegExp(r'data-video-vkey="([0-9a-z]+)"').firstMatch(block)?.group(1);
+    if (vkey == null || vkey.isEmpty) continue;
+    var title =
+        RegExp(r'alt="([^"]+)"').firstMatch(block)?.group(1) ?? '';
+    if (title.isEmpty) {
+      final titleMatch = RegExp(
+        r'<a class="thumbnailTitle"[^>]*>(.*?)</a>',
+        dotAll: true,
+      ).firstMatch(block);
+      title = titleMatch == null
+          ? ''
+          : titleMatch
+                .group(1)!
+                .replaceAll(RegExp(r'<[^>]*>'), '')
+                .trim();
+    }
+    title = _unescapeHtml(title).trim();
+    if (title.isEmpty) continue;
+    var thumb =
+        RegExp(r'src="(https://[^"]*phncdn[^"]*)"').firstMatch(block)?.group(1) ??
+        RegExp(r'data-poster="(https://[^"]*phncdn[^"]*)"')
+            .firstMatch(block)
+            ?.group(1) ??
+        '';
+    thumb = _unescapeHtml(thumb);
+    final duration =
+        RegExp(r'class="bgEffect time">([^<]+)<')
+            .firstMatch(block)
+            ?.group(1)
+            ?.trim() ??
+        '';
+    final viewsMatch = RegExp(
+      r'class="videoViews">.*?([\d.,]+)\s*([KM])?<',
+      dotAll: true,
+    ).firstMatch(block);
+    final views = viewsMatch == null
+        ? 0
+        : _parseSiteViews(
+            '${viewsMatch.group(1) ?? ''}${viewsMatch.group(2) ?? ''}',
+          );
+    final webm = RegExp(r'data-webm="([^"]+)"').firstMatch(block)?.group(1);
+    videos.add(
+      VideoItem(
+        viewkey: vkey,
+        title: title,
+        duration: duration,
+        views: views,
+        // Cards carry no rating on the site; sorting is server-side
+        // via o=, so no client-side sort is needed for these items.
+        rating: 0,
+        thumb: thumb,
+        url: '$_base/view_video.php?viewkey=$vkey',
+      ),
+    );
+    if (webm != null && webm.contains('_fb.mp4')) {
+      previews[vkey] = _unescapeHtml(webm);
+    }
+  }
+  if (videos.isEmpty) {
+    throw ParseException('no videos parsed from site search');
+  }
+  return SiteSearchPage(videos: videos, previews: previews);
+}
+
+/// Search via the mobile website's own search page (v0.2.4).
+///
+/// The Webmasters API and the site return DIFFERENT video sets for the
+/// same query (verified live: overlap 0/30), so API search can never
+/// find some videos the site shows. The site page is the source of
+/// truth for what the user sees on the mobile site: same videos, same
+/// order. Sort modes are the site's own `o=` params (verified live
+/// 2026-11-22 — default/o=mv/o=tr/o=mr/o=lg each give a different
+/// order of 28 cards; o=lg durations strictly descending):
+///   most viewed -> mv, top rated -> tr, most recent -> mr,
+///   longest -> lg.
+/// Throws [ParseException] when the fetch fails or no cards are found,
+/// so the caller can fall back to the Webmasters API search.
+Future<SiteSearchPage> directSiteSearch(
+  String query, {
+  int page = 1,
+  String ordering = 'mv',
+}) async {
+  final params = <String, String>{'search': query, 'page': '$page'};
+  if (ordering.isNotEmpty) params['o'] = ordering;
+  final url = '$_base/video/search?${Uri(queryParameters: params).query}';
+  // One retry: the site intermittently answers the first request with a
+  // 302/empty body (seen live with the preview fetch), so a single
+  // failed fetch must not mean "no results".
+  ParseException? lastError;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      final html = await _getString(
+        url,
+        userAgent: _mobileUserAgent,
+        extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
+      );
+      return parseSiteSearch(html);
+    } on ParseException catch (e) {
+      lastError = e;
+      if (attempt == 0) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+  }
+  throw lastError ?? ParseException('site search failed');
 }
 
 /// Per-video preview clip for the exact videos the app shows (v0.2.3).

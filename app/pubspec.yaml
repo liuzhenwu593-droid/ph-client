@@ -1,7 +1,7 @@
 name: ph_player
 description: "PsexHub — third-party video client: home, categories, search, favorites, offline downloads, resume."
 publish_to: "none"
-version: 0.2.3+5
+version: 0.2.4+6
 
 environment:
   sdk: ^3.9.0
