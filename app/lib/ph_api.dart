@@ -38,6 +38,13 @@ class ApiException implements Exception {
   String toString() => 'ApiException: $message';
 }
 
+/// One cached preview-URL map (see [PhApi.previewUrls]).
+class _PreviewEntry {
+  const _PreviewEntry({required this.fetchedAt, required this.urls});
+  final int fetchedAt;
+  final Map<String, String> urls;
+}
+
 /// Search sort modes shown in the UI.
 enum SearchOrdering { mostViewed, topRated, mostRecent, longest }
 
@@ -296,6 +303,36 @@ class PhApi {
 
   Future<void> invalidateVideo(String viewkey) async {
     await _cache?.invalidate(viewkey);
+  }
+
+  /// Preview clip URLs (v0.2.2, mobile-site style). In-memory cache,
+  /// 50 minutes: the clip signatures last 1-2h, so 50 min stays inside
+  /// validity. Fetched in the background after a list loads; an empty
+  /// map just means "no previews for this list" and the covers stay.
+  final Map<String, _PreviewEntry> _previewCache = {};
+
+  Future<Map<String, String>> previewUrls({
+    String? query,
+    int? categoryId,
+    int page = 1,
+  }) async {
+    final key = 'preview:${query ?? ''}:${categoryId ?? ''}:$page';
+    final entry = _previewCache[key];
+    if (entry != null &&
+        DateTime.now().millisecondsSinceEpoch - entry.fetchedAt <
+            50 * 60 * 1000) {
+      return entry.urls;
+    }
+    final urls = await direct.directPreviewUrls(
+      query: query,
+      categoryId: categoryId,
+      page: page,
+    );
+    _previewCache[key] = _PreviewEntry(
+      fetchedAt: DateTime.now().millisecondsSinceEpoch,
+      urls: urls,
+    );
+    return urls;
   }
 
   /// Fetch a freshly signed thumbnail URL for one video (stored thumbs

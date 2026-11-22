@@ -19,8 +19,9 @@
 ///   launches. No login, no account, no download in this app.
 ///   (v0.2: PlaybackCache in play_cache.dart keeps them up to 110 minutes
 ///   — inside the 2h validity — so replays skip the network entirely.)
-/// - Fast-start (v0.2): the player starts at the lowest HLS >= 480p and
-///   only that URL is verified per attempt; see directVideoSources.
+/// - Default start quality (v0.2.2): the highest HLS <= 720p (720p when
+///   present even if 1080p exists, else 480p, else 240p); only that URL
+///   is verified per attempt; see directVideoSources.
 ///
 /// Pure Dart (dart:io / dart:convert only) so it can be tested with a
 /// standalone Dart SDK: see README.md.
@@ -47,12 +48,13 @@ class ParseException implements Exception {
 Future<String> _getString(
   String url, {
   Map<String, String>? extraHeaders,
+  String? userAgent,
   Duration timeout = const Duration(seconds: 30),
 }) async {
   final client = HttpClient();
   try {
     final request = await client.getUrl(Uri.parse(url)).timeout(timeout);
-    request.headers.set(HttpHeaders.userAgentHeader, _userAgent);
+    request.headers.set(HttpHeaders.userAgentHeader, userAgent ?? _userAgent);
     request.headers.set(
       HttpHeaders.cookieHeader,
       'age_verified=1; accessAgeDisclaimerPH=1; '
@@ -208,11 +210,11 @@ List<VideoSource> _sourcesFromFlashvars(Map<String, dynamic> flashvars) {
 
 /// Fetch detail page and return playable sources, retrying until the
 /// *start* HLS URL verifies (see file header for the ev-h / hv-h finding).
-/// v0.2 fast-start: only the start candidate (lowest HLS >= 480p, usually
-/// 480p) is verified, not the 1080p top URL — the player starts at 480p
-/// and the user can upgrade to 1080p afterwards. All qualities from one
-/// fetch share the same CDN host (verified live 2026-11-22), so verifying
-/// the start URL validates the whole set.
+/// v0.2.2: only the start candidate (highest HLS <= 720p, usually 720p)
+/// is verified, not the 1080p top URL — the player starts at 720p by
+/// default and the user can switch to 1080p afterwards. All qualities
+/// from one fetch share the same CDN host (verified live 2026-11-22),
+/// so verifying the start URL validates the whole set.
 ///
 /// v0.2.1: attempts run in PARALLEL rounds. The ev-h share per fetch has
 /// dropped to roughly 20-40% (it was ~50% when v0.1 was measured), so 5
@@ -266,5 +268,89 @@ Future<VideoDetail?> _tryOneFetch(String viewkey) async {
     return null;
   } catch (_) {
     return null;
+  }
+}
+
+/// Mobile-site preview clip URLs (v0.2.2).
+///
+/// The mobile site auto-plays a small muted preview when a video card
+/// scrolls into view — no tap, no long-press. Each card's `<a>` carries
+/// the clip in a `data-webm="https://.../360P_360K_<id>_fb.mp4?..."`.
+/// attribute (360p, low bitrate, signed). The Webmasters JSON API does
+/// NOT return this URL, so the app fetches the matching mobile list page
+/// and extracts the viewkey -> clip map.
+///
+/// Verified live 2026-11-22 (sandbox, mobile UA on www.pornhub.com):
+/// - Mobile search page: 30/30 video cards carry data-webm + viewkey in
+///   the same `<a>`; mobile home (?o=mv&t=w): 41 hits; mobile category
+///   page: 69 hits. Desktop pages do NOT carry it (0 _fb.mp4), so the
+///   fetch must use a mobile UA.
+/// - The clip GETs 200 video/mp4 (~512 KB, ftypisom) with or without
+///   Referer. Signatures last 1-2h (hdnea exp = 1h, validfrom/validto
+///   = 2h), so the caller caches the map well inside that window.
+const String _mobileUserAgent =
+    'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36';
+
+/// Mobile list-page URL matching a list the app shows: search, category,
+/// or the home feed (most-viewed, weekly — same as the Webmasters home).
+String mobileListUrl({String? query, int? categoryId, int page = 1}) {
+  if (query != null && query.isNotEmpty) {
+    return '$_base/video/search?search=${Uri.encodeQueryComponent(query)}'
+        '&page=$page';
+  }
+  if (categoryId != null) {
+    return '$_base/video?c=$categoryId&page=$page';
+  }
+  return '$_base/video?o=mv&t=w&page=$page';
+}
+
+/// Fetch a mobile list page and return viewkey -> preview mp4 URL.
+///
+/// The map is keyed twice per video: by the hex viewkey from the card's
+/// href AND by the numeric video id (the `data-video-id` attribute and
+/// the id inside the mp4 path), because API lists key videos by the
+/// numeric id while site lists use the hex viewkey. Returns an empty map
+/// (never throws) when the page layout changes or the fetch fails —
+/// previews are a bonus, the list still works without them.
+Future<Map<String, String>> directPreviewUrls({
+  String? query,
+  int? categoryId,
+  int page = 1,
+}) async {
+  try {
+    final html = await _getString(
+      mobileListUrl(query: query, categoryId: categoryId, page: page),
+      userAgent: _mobileUserAgent,
+      extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
+    );
+    final found = <String, String>{};
+    final anchorRe = RegExp(r'<a[^>]*>', dotAll: true);
+    final webmRe = RegExp(r'data-webm="([^"]+)"');
+    final viewkeyRe = RegExp(r'viewkey=([0-9a-z]+)');
+    final videoIdRe = RegExp(r'data-video-id="(\d+)"');
+    final mp4IdRe = RegExp(r'/(\d+)/360P_360K_\d+_fb\.mp4');
+    for (final match in anchorRe.allMatches(html)) {
+      final tag = match.group(0)!;
+      final webm = webmRe.firstMatch(tag)?.group(1);
+      if (webm == null || !webm.contains('_fb.mp4')) continue;
+      final url = webm
+          .replaceAll('&amp;', '&')
+          .replaceAll('&#039;', "'")
+          .replaceAll('&quot;', '"');
+      final viewkey = viewkeyRe.firstMatch(tag)?.group(1);
+      if (viewkey != null && viewkey.isNotEmpty) {
+        found[viewkey] = url;
+      }
+      final numericId =
+          videoIdRe.firstMatch(tag)?.group(1) ??
+          mp4IdRe.firstMatch(url)?.group(1);
+      if (numericId != null && numericId.isNotEmpty) {
+        found[numericId] = url;
+      }
+    }
+    return found;
+  } catch (_) {
+    return {};
   }
 }

@@ -30,6 +30,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final List<VideoItem> _videos = [];
+  final Map<String, String> _previews = {};
   bool _isLoading = false;
   bool _isLoadingMore = false;
   String? _error;
@@ -83,6 +84,9 @@ class _HomePageState extends State<HomePage> {
         _isLoadingMore = false;
         _error = null;
       });
+      // Previews (v0.2.2): fetch the mobile list page's clip URLs in
+      // the background — never block the list on them.
+      _fetchPreviews(page);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -91,6 +95,16 @@ class _HomePageState extends State<HomePage> {
         // A failed background refresh must not wipe the cached list.
         if (!background) _error = '加载失败：$e';
       });
+    }
+  }
+
+  Future<void> _fetchPreviews(int page) async {
+    try {
+      final urls = await widget.api.previewUrls(page: page);
+      if (!mounted || urls.isEmpty) return;
+      setState(() => _previews.addAll(urls));
+    } catch (_) {
+      // No previews for this list: covers stay, nothing breaks.
     }
   }
 
@@ -135,6 +149,7 @@ class _HomePageState extends State<HomePage> {
           onOpen: _open,
           isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
           onToggleFavorite: _toggleFavorite,
+          previewUrls: _previews,
         );
       },
     );

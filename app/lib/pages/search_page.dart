@@ -67,6 +67,7 @@ class SearchPage extends StatefulWidget {
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _controller = TextEditingController();
   final List<VideoItem> _videos = [];
+  final Map<String, String> _previews = {};
   bool _isLoading = false;
   bool _isLoadingMore = false;
   String? _error;
@@ -112,6 +113,8 @@ class _SearchPageState extends State<SearchPage> {
         _isLoading = false;
         _isLoadingMore = false;
       });
+      // Previews (v0.2.2): fetch in the background, never block the list.
+      _fetchPreviews(page);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -119,6 +122,19 @@ class _SearchPageState extends State<SearchPage> {
         _isLoadingMore = false;
         _error = '搜索失败：$e';
       });
+    }
+  }
+
+  Future<void> _fetchPreviews(int page) async {
+    try {
+      final urls = await widget.api.previewUrls(
+        query: _query,
+        page: page,
+      );
+      if (!mounted || urls.isEmpty) return;
+      setState(() => _previews.addAll(urls));
+    } catch (_) {
+      // No previews for this list: covers stay, nothing breaks.
     }
   }
 
@@ -252,6 +268,7 @@ class _SearchPageState extends State<SearchPage> {
                     await widget.favorites.toggle(v);
                     if (mounted) setState(() {});
                   },
+                  previewUrls: _previews,
                 ),
         ),
       ],

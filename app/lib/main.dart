@@ -4,6 +4,7 @@ import 'downloads.dart';
 import 'local_store.dart';
 import 'pages/categories_page.dart';
 import 'pages/favorites_page.dart';
+import 'pages/history_page.dart';
 import 'pages/home_page.dart';
 import 'pages/search_page.dart';
 import 'pages/settings_page.dart';
@@ -225,6 +226,13 @@ class _MainScreenState extends State<MainScreen> {
         settings: widget.settings,
         downloads: widget.downloads,
       ),
+      HistoryPage(
+        api: widget.api,
+        favorites: widget.favorites,
+        watch: widget.watch,
+        settings: widget.settings,
+        downloads: widget.downloads,
+      ),
       SettingsPage(
         settings: widget.settings,
         api: widget.api,
@@ -234,7 +242,7 @@ class _MainScreenState extends State<MainScreen> {
         downloads: widget.downloads,
       ),
     ];
-    const titles = ['首页', '分类', '搜索', '收藏', '设置'];
+    const titles = ['首页', '分类', '搜索', '收藏', '历史', '设置'];
     return Scaffold(
       appBar: AppBar(title: Text(titles[_index])),
       body: IndexedStack(index: _index, children: pages),
@@ -247,6 +255,7 @@ class _MainScreenState extends State<MainScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '分类'),
           BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
           BottomNavigationBarItem(icon: Icon(Icons.star), label: '收藏'),
+          BottomNavigationBarItem(icon: Icon(Icons.history), label: '历史'),
           BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
         ],
       ),

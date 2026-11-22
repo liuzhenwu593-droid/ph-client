@@ -183,19 +183,21 @@ class VideoDetail {
     return hls.first;
   }
 
-  /// Fast-start source: the lowest HLS quality that is still >= 480p
-  /// (usually 480p itself). All qualities from one detail-page fetch share
-  /// the same CDN host (verified live 2026-11-22: all four qualities are
-  /// either ev-h or hv-h together), so verifying this one URL validates
-  /// the whole set and the player can upgrade to 1080p later for free.
-  /// Falls back to the lowest available HLS quality when nothing is >= 480p.
+  /// Default start source (v0.2.2): the highest HLS quality that is
+  /// still <= 720p — 720p when present (even if 1080p exists), else 480p,
+  /// else 240p. All qualities from one detail-page fetch share the same
+  /// CDN host (verified live 2026-11-22: all four qualities are either
+  /// ev-h or hv-h together), so verifying this one URL validates the
+  /// whole set and the user can still switch to 1080p manually.
+  /// Falls back to the lowest available HLS quality when nothing is
+  /// <= 720p.
   VideoSource? get startSource {
     final hls = hlsSources;
     if (hls.isEmpty) return bestSource;
-    final atLeast480 = hls.where((s) => s.height >= 480).toList();
-    if (atLeast480.isNotEmpty) {
-      atLeast480.sort((a, b) => a.height.compareTo(b.height));
-      return atLeast480.first;
+    final upTo720 = hls.where((s) => s.height <= 720).toList();
+    if (upTo720.isNotEmpty) {
+      upTo720.sort((a, b) => b.height.compareTo(a.height));
+      return upTo720.first;
     }
     final sorted = List<VideoSource>.from(hls)
       ..sort((a, b) => a.height.compareTo(b.height));

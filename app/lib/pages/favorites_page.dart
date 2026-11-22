@@ -8,8 +8,8 @@ import '../settings.dart';
 import '../widgets/video_list.dart';
 import 'player_page.dart';
 
-/// Favorites (starred videos) + watch history, all local.
-/// Tapping a history entry resumes from its saved position.
+/// Favorites (starred videos) only, all local.
+/// Watch history lives on its own tab now (HistoryPage, v0.2.2).
 class FavoritesPage extends StatelessWidget {
   const FavoritesPage({
     super.key,
@@ -44,10 +44,9 @@ class FavoritesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([favorites, watch]),
+      listenable: favorites,
       builder: (context, _) {
         final favs = favorites.items;
-        final history = watch.entries;
         return ListView(
           children: [
             const Padding(
@@ -78,59 +77,6 @@ class FavoritesPage extends StatelessWidget {
                     await favorites.updateThumb(v.viewkey, fresh);
                     return fresh;
                   },
-                ),
-              ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  const Text(
-                    '观看历史',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                  const Spacer(),
-                  if (history.isNotEmpty)
-                    TextButton(
-                      onPressed: () async {
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('清空观看历史？'),
-                            content: const Text('会同时清除所有续播断点。'),
-                            actions: [
-                              TextButton(
-                                onPressed: () =>
-                                    Navigator.of(context).pop(false),
-                                child: const Text('取消'),
-                              ),
-                              FilledButton(
-                                onPressed: () =>
-                                    Navigator.of(context).pop(true),
-                                child: const Text('清空'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirm == true) await watch.clear();
-                      },
-                      child: const Text('清空历史'),
-                    ),
-                ],
-              ),
-            ),
-            if (history.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('还没有看过视频。', style: TextStyle(color: Colors.grey)),
-              )
-            else
-              ...history.map(
-                (entry) => VideoCard(
-                  video: entry.video,
-                  onTap: () => _open(context, entry.video),
-                  isFavorite: favorites.isFavorite(entry.video.viewkey),
-                  onToggleFavorite: () => favorites.toggle(entry.video),
                 ),
               ),
             const SizedBox(height: 24),

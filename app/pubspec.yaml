@@ -1,7 +1,7 @@
 name: ph_player
 description: "PsexHub — third-party video client: home, categories, search, favorites, offline downloads, resume."
 publish_to: "none"
-version: 0.2.1+3
+version: 0.2.2+4
 
 environment:
   sdk: ^3.9.0
@@ -21,6 +21,8 @@ dependencies:
   # requests on pix-cdn77, ~half of all thumbs — verified live 2026-11-22).
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
+  # Auto-play previews: which list card is on screen (v0.2.2).
+  visibility_detector: ^0.4.0+2
 
 dev_dependencies:
   flutter_test:
