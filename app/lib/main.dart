@@ -11,6 +11,7 @@ import 'pages/settings_page.dart';
 import 'ph_api.dart';
 import 'play_cache.dart';
 import 'settings.dart';
+import 'widgets/grid_toggle.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -243,21 +244,32 @@ class _MainScreenState extends State<MainScreen> {
       ),
     ];
     const titles = ['首页', '分类', '搜索', '收藏', '历史', '设置'];
-    return Scaffold(
-      appBar: AppBar(title: Text(titles[_index])),
-      body: IndexedStack(index: _index, children: pages),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
-          BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '分类'),
-          BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
-          BottomNavigationBarItem(icon: Icon(Icons.star), label: '收藏'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: '历史'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
-        ],
+    // Rebuilds when the layout toggle changes the column count.
+    return ListenableBuilder(
+      listenable: widget.settings,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          title: Text(titles[_index]),
+          // Layout toggle on video lists only: not on the category-name
+          // grid (index 1, which never changes) or Settings (index 5).
+          actions: _index == 1 || _index == 5
+              ? null
+              : [GridColumnsButton(settings: widget.settings)],
+        ),
+        body: IndexedStack(index: _index, children: pages),
+        bottomNavigationBar: BottomNavigationBar(
+          currentIndex: _index,
+          onTap: (i) => setState(() => _index = i),
+          type: BottomNavigationBarType.fixed,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.home), label: '首页'),
+            BottomNavigationBarItem(icon: Icon(Icons.grid_view), label: '分类'),
+            BottomNavigationBarItem(icon: Icon(Icons.search), label: '搜索'),
+            BottomNavigationBarItem(icon: Icon(Icons.star), label: '收藏'),
+            BottomNavigationBarItem(icon: Icon(Icons.history), label: '历史'),
+            BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
+          ],
+        ),
       ),
     );
   }

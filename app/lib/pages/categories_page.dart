@@ -5,6 +5,7 @@ import '../local_store.dart';
 import '../models.dart';
 import '../ph_api.dart';
 import '../settings.dart';
+import '../widgets/grid_toggle.dart';
 import '../widgets/video_list.dart';
 import 'player_page.dart';
 
@@ -239,24 +240,32 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.category.name)),
-      body: ListenableBuilder(
-        listenable: widget.favorites,
-        builder: (context, _) => VideoListView(
-          videos: _videos,
-          isLoading: _isLoading,
-          error: _error,
-          onRefresh: () => _load(reset: true, forceRefresh: true),
-          onLoadMore: _loadMore,
-          hasMore: _error == null,
-          onOpen: _open,
-          isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
-          onToggleFavorite: (v) async {
-            await widget.favorites.toggle(v);
-            if (mounted) setState(() {});
-          },
-          previewUrls: _previews,
+    // Rebuilds when the layout toggle changes the column count.
+    return ListenableBuilder(
+      listenable: widget.settings,
+      builder: (context, _) => Scaffold(
+        appBar: AppBar(
+          title: Text(widget.category.name),
+          actions: [GridColumnsButton(settings: widget.settings)],
+        ),
+        body: ListenableBuilder(
+          listenable: widget.favorites,
+          builder: (context, _) => VideoListView(
+            videos: _videos,
+            isLoading: _isLoading,
+            error: _error,
+            onRefresh: () => _load(reset: true, forceRefresh: true),
+            onLoadMore: _loadMore,
+            hasMore: _error == null,
+            onOpen: _open,
+            isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
+            onToggleFavorite: (v) async {
+              await widget.favorites.toggle(v);
+              if (mounted) setState(() {});
+            },
+            previewUrls: _previews,
+            columns: widget.settings.gridColumns,
+          ),
         ),
       ),
     );

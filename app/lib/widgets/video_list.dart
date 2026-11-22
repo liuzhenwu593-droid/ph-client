@@ -14,6 +14,8 @@ import 'thumb_image.dart';
 /// When [autoplayPreview] is true and [previewUrl] is set, the card
 /// plays the muted preview clip over the cover instead of the still
 /// image (v0.2.2, mobile-site style).
+/// [compact] is the 2/3-column grid mode: no outer margin, tighter
+/// padding, views only on one line (no rating) so the card fits.
 class VideoCard extends StatelessWidget {
   const VideoCard({
     super.key,
@@ -24,6 +26,7 @@ class VideoCard extends StatelessWidget {
     this.onRefreshThumb,
     this.previewUrl,
     this.autoplayPreview = false,
+    this.compact = false,
   });
 
   final VideoItem video;
@@ -33,13 +36,16 @@ class VideoCard extends StatelessWidget {
   final Future<String?> Function(VideoItem video)? onRefreshThumb;
   final String? previewUrl;
   final bool autoplayPreview;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final showPreview =
         autoplayPreview && previewUrl != null && previewUrl!.isNotEmpty;
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      margin: compact
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
@@ -109,7 +115,9 @@ class VideoCard extends StatelessWidget {
               ],
             ),
             Padding(
-              padding: const EdgeInsets.all(10),
+              padding: compact
+                  ? const EdgeInsets.all(8)
+                  : const EdgeInsets.all(10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -120,11 +128,25 @@ class VideoCard extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    '${video.viewsLabel}'
-                    '${video.rating > 0 ? '  •  ${video.rating.toStringAsFixed(0)}% 好评' : ''}',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                  ),
+                  if (compact)
+                    Text(
+                      video.viewsLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.grey.shade400,
+                        fontSize: 11,
+                      ),
+                    )
+                  else
+                    Text(
+                      '${video.viewsLabel}'
+                      '${video.rating > 0 ? '  •  ${video.rating.toStringAsFixed(0)}% 好评' : ''}',
+                      style: TextStyle(
+                        color: Colors.grey.shade400,
+                        fontSize: 12,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -145,6 +167,11 @@ class VideoCard extends StatelessWidget {
 /// card (visible fraction >= 0.5) plays its clip, muted and looped;
 /// only one preview plays at a time, and previews stop when the app
 /// goes to the background or a player page is pushed on top.
+///
+/// Layout (v0.2.2): [columns] is 1 (the old full-width list), 2 or 3.
+/// In grid mode the cards are compact (16:9 cover + 1-2 line title +
+/// duration badge); pull-to-refresh, load-more and auto-play previews
+/// all work the same as in list mode.
 class VideoListView extends StatefulWidget {
   const VideoListView({
     super.key,
@@ -159,6 +186,8 @@ class VideoListView extends StatefulWidget {
     this.onToggleFavorite,
     this.onRefreshThumb,
     this.previewUrls = const {},
+    this.columns = 1,
+    this.emptyText = '没有结果，换个关键词试试',
   });
 
   final List<VideoItem> videos;
@@ -174,6 +203,12 @@ class VideoListView extends StatefulWidget {
 
   /// viewkey -> preview mp4 URL. Empty map = no previews for this list.
   final Map<String, String> previewUrls;
+
+  /// 1 = full-width list (default), 2 or 3 = grid.
+  final int columns;
+
+  /// Shown when the list is empty and not loading.
+  final String emptyText;
 
   @override
   State<VideoListView> createState() => _VideoListViewState();
@@ -305,7 +340,47 @@ class _VideoListViewState extends State<VideoListView>
       return const Center(child: CircularProgressIndicator());
     }
     if (videos.isEmpty) {
-      return const Center(child: Text('没有结果，换个关键词试试'));
+      return Center(child: Text(widget.emptyText));
+    }
+    if (widget.columns > 1) {
+      return RefreshIndicator(
+        onRefresh: widget.onRefresh,
+        child: CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.all(12),
+              sliver: SliverGrid(
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: widget.columns,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  // Compact card: 16:9 cover + title (1-2 lines) + one
+                  // meta line. Slightly taller than the worst case so a
+                  // two-line title never overflows the cell.
+                  childAspectRatio: widget.columns == 2 ? 1.0 : 0.8,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _buildCard(context, index),
+                  childCount: videos.length,
+                ),
+              ),
+            ),
+            if (widget.hasMore)
+              SliverToBoxAdapter(
+                child: Builder(
+                  builder: (context) {
+                    // Load-more sentinel, same as the list mode below.
+                    Future.microtask(widget.onLoadMore);
+                    return const Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      );
     }
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
@@ -320,36 +395,44 @@ class _VideoListViewState extends State<VideoListView>
               child: Center(child: CircularProgressIndicator()),
             );
           }
-          final video = videos[index];
-          final cardKey = '$index:${video.viewkey}';
-          // Prefetch the next few covers so scrolling shows them instantly.
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (context.mounted) {
-              precacheThumbs(
-                context,
-                videos.skip(index + 1).take(3).map((v) => v.thumb),
-              );
-            }
-          });
-          return VisibilityDetector(
-            key: ValueKey('vis:$cardKey'),
-            onVisibilityChanged: (info) =>
-                _onVisibility(cardKey, info.visibleFraction),
-            child: VideoCard(
-              video: video,
-              onTap: () => widget.onOpen(video),
-              isFavorite: widget.isFavorite == null
-                  ? null
-                  : widget.isFavorite!(video),
-              onToggleFavorite: widget.onToggleFavorite == null
-                  ? null
-                  : () => widget.onToggleFavorite!(video),
-              onRefreshThumb: widget.onRefreshThumb,
-              previewUrl: widget.previewUrls[video.viewkey],
-              autoplayPreview: _activeKey == cardKey,
-            ),
-          );
+          return _buildCard(context, index);
         },
+      ),
+    );
+  }
+
+  /// One card with visibility tracking (for auto-play previews) and
+  /// cover prefetch. Shared by list and grid modes.
+  Widget _buildCard(BuildContext context, int index) {
+    final videos = widget.videos;
+    final video = videos[index];
+    final cardKey = '$index:${video.viewkey}';
+    // Prefetch the next few covers so scrolling shows them instantly.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) {
+        precacheThumbs(
+          context,
+          videos.skip(index + 1).take(3).map((v) => v.thumb),
+        );
+      }
+    });
+    return VisibilityDetector(
+      key: ValueKey('vis:$cardKey'),
+      onVisibilityChanged: (info) =>
+          _onVisibility(cardKey, info.visibleFraction),
+      child: VideoCard(
+        video: video,
+        onTap: () => widget.onOpen(video),
+        isFavorite: widget.isFavorite == null
+            ? null
+            : widget.isFavorite!(video),
+        onToggleFavorite: widget.onToggleFavorite == null
+            ? null
+            : () => widget.onToggleFavorite!(video),
+        onRefreshThumb: widget.onRefreshThumb,
+        previewUrl: widget.previewUrls[video.viewkey],
+        autoplayPreview: _activeKey == cardKey,
+        compact: widget.columns > 1,
       ),
     );
   }

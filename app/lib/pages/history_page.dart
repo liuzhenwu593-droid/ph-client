@@ -12,6 +12,7 @@ import 'player_page.dart';
 /// Storage and the 50-entry cap are unchanged (WatchStore); tapping an
 /// entry opens the player, which resumes from its saved position.
 /// "清空历史" also clears all resume points, as before.
+/// Layout follows the 1/2/3-column toggle (v0.2.2) like the other lists.
 class HistoryPage extends StatelessWidget {
   const HistoryPage({
     super.key,
@@ -49,7 +50,8 @@ class HistoryPage extends StatelessWidget {
       listenable: Listenable.merge([favorites, watch]),
       builder: (context, _) {
         final history = watch.entries;
-        return ListView(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -89,21 +91,21 @@ class HistoryPage extends StatelessWidget {
                 ],
               ),
             ),
-            if (history.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text('还没有看过视频。', style: TextStyle(color: Colors.grey)),
-              )
-            else
-              ...history.map(
-                (entry) => VideoCard(
-                  video: entry.video,
-                  onTap: () => _open(context, entry.video),
-                  isFavorite: favorites.isFavorite(entry.video.viewkey),
-                  onToggleFavorite: () => favorites.toggle(entry.video),
-                ),
+            Expanded(
+              child: VideoListView(
+                videos: history.map((e) => e.video).toList(),
+                isLoading: false,
+                error: null,
+                onRefresh: () async {},
+                onLoadMore: () {},
+                hasMore: false,
+                onOpen: (v) => _open(context, v),
+                isFavorite: (v) => favorites.isFavorite(v.viewkey),
+                onToggleFavorite: (v) => favorites.toggle(v),
+                columns: settings.gridColumns,
+                emptyText: '还没有看过视频。',
               ),
-            const SizedBox(height: 24),
+            ),
           ],
         );
       },

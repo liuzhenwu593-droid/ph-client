@@ -150,6 +150,7 @@ class _HomePageState extends State<HomePage> {
           isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
           onToggleFavorite: _toggleFavorite,
           previewUrls: _previews,
+          columns: widget.settings.gridColumns,
         );
       },
     );

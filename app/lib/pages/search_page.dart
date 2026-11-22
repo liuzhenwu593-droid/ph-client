@@ -269,6 +269,7 @@ class _SearchPageState extends State<SearchPage> {
                     if (mounted) setState(() {});
                   },
                   previewUrls: _previews,
+                  columns: widget.settings.gridColumns,
                 ),
         ),
       ],

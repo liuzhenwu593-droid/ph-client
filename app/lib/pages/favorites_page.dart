@@ -10,6 +10,7 @@ import 'player_page.dart';
 
 /// Favorites (starred videos) only, all local.
 /// Watch history lives on its own tab now (HistoryPage, v0.2.2).
+/// Layout follows the 1/2/3-column toggle (v0.2.2) like the other lists.
 class FavoritesPage extends StatelessWidget {
   const FavoritesPage({
     super.key,
@@ -47,7 +48,8 @@ class FavoritesPage extends StatelessWidget {
       listenable: favorites,
       builder: (context, _) {
         final favs = favorites.items;
-        return ListView(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -56,30 +58,27 @@ class FavoritesPage extends StatelessWidget {
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
             ),
-            if (favs.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text(
-                  '还没有收藏，点视频卡片右上角的星星就能收藏。',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              )
-            else
-              ...favs.map(
-                (video) => VideoCard(
-                  video: video,
-                  onTap: () => _open(context, video),
-                  isFavorite: true,
-                  onToggleFavorite: () => favorites.toggle(video),
-                  onRefreshThumb: (v) async {
-                    final fresh = await api.refreshThumb(v.viewkey);
-                    if (fresh.isEmpty) return null;
-                    await favorites.updateThumb(v.viewkey, fresh);
-                    return fresh;
-                  },
-                ),
+            Expanded(
+              child: VideoListView(
+                videos: favs,
+                isLoading: false,
+                error: null,
+                onRefresh: () async {},
+                onLoadMore: () {},
+                hasMore: false,
+                onOpen: (v) => _open(context, v),
+                isFavorite: (_) => true,
+                onToggleFavorite: (v) => favorites.toggle(v),
+                onRefreshThumb: (v) async {
+                  final fresh = await api.refreshThumb(v.viewkey);
+                  if (fresh.isEmpty) return null;
+                  await favorites.updateThumb(v.viewkey, fresh);
+                  return fresh;
+                },
+                columns: settings.gridColumns,
+                emptyText: '还没有收藏，点视频卡片右上角的星星就能收藏。',
               ),
-            const SizedBox(height: 24),
+            ),
           ],
         );
       },
