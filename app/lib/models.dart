@@ -1,5 +1,5 @@
-/// Plain data models. No Flutter imports: this file is analyzable with a
-/// standalone Dart SDK (see README.md).
+// Plain data models. No Flutter imports: this file is analyzable with a
+// standalone Dart SDK (see README.md).
 
 class VideoItem {
   const VideoItem({
