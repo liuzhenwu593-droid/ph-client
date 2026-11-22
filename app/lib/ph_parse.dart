@@ -318,39 +318,79 @@ Future<Map<String, String>> directPreviewUrls({
   int? categoryId,
   int page = 1,
 }) async {
-  try {
-    final html = await _getString(
-      mobileListUrl(query: query, categoryId: categoryId, page: page),
-      userAgent: _mobileUserAgent,
-      extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
-    );
-    final found = <String, String>{};
-    final anchorRe = RegExp(r'<a[^>]*>', dotAll: true);
-    final webmRe = RegExp(r'data-webm="([^"]+)"');
-    final viewkeyRe = RegExp(r'viewkey=([0-9a-z]+)');
-    final videoIdRe = RegExp(r'data-video-id="(\d+)"');
-    final mp4IdRe = RegExp(r'/(\d+)/360P_360K_\d+_fb\.mp4');
-    for (final match in anchorRe.allMatches(html)) {
-      final tag = match.group(0)!;
-      final webm = webmRe.firstMatch(tag)?.group(1);
-      if (webm == null || !webm.contains('_fb.mp4')) continue;
-      final url = webm
-          .replaceAll('&amp;', '&')
-          .replaceAll('&#039;', "'")
-          .replaceAll('&quot;', '"');
-      final viewkey = viewkeyRe.firstMatch(tag)?.group(1);
-      if (viewkey != null && viewkey.isNotEmpty) {
-        found[viewkey] = url;
+  // One retry: the site intermittently answers the first request with a
+  // 302/empty body (seen live in the sandbox 2026-11-22) and the retry
+  // succeeds, so a single failed fetch must not mean "no previews".
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      final html = await _getString(
+        mobileListUrl(query: query, categoryId: categoryId, page: page),
+        userAgent: _mobileUserAgent,
+        extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
+      );
+      final found = <String, String>{};
+      final anchorRe = RegExp(r'<a[^>]*>', dotAll: true);
+      final webmRe = RegExp(r'data-webm="([^"]+)"');
+      final viewkeyRe = RegExp(r'viewkey=([0-9a-z]+)');
+      final videoIdRe = RegExp(r'data-video-id="(\d+)"');
+      final mp4IdRe = RegExp(r'/(\d+)/360P_360K_\d+_fb\.mp4');
+      for (final match in anchorRe.allMatches(html)) {
+        final tag = match.group(0)!;
+        final webm = webmRe.firstMatch(tag)?.group(1);
+        if (webm == null || !webm.contains('_fb.mp4')) continue;
+        final url = webm
+            .replaceAll('&amp;', '&')
+            .replaceAll('&#039;', "'")
+            .replaceAll('&quot;', '"');
+        final viewkey = viewkeyRe.firstMatch(tag)?.group(1);
+        if (viewkey != null && viewkey.isNotEmpty) {
+          found[viewkey] = url;
+        }
+        final numericId =
+            videoIdRe.firstMatch(tag)?.group(1) ??
+            mp4IdRe.firstMatch(url)?.group(1);
+        if (numericId != null && numericId.isNotEmpty) {
+          found[numericId] = url;
+        }
       }
-      final numericId =
-          videoIdRe.firstMatch(tag)?.group(1) ??
-          mp4IdRe.firstMatch(url)?.group(1);
-      if (numericId != null && numericId.isNotEmpty) {
-        found[numericId] = url;
-      }
+      return found;
+    } catch (_) {
+      if (attempt == 1) return {};
+      await Future.delayed(const Duration(milliseconds: 500));
     }
-    return found;
-  } catch (_) {
-    return {};
   }
+  return {};
+}
+
+/// Per-video preview clip for the exact videos the app shows (v0.2.3).
+///
+/// Root cause of "previews never play" (verified live 2026-11-22):
+/// the Webmasters API list and the mobile site list are DIFFERENT video
+/// sets — API home vs mobile ?o=mv&t=w overlapped 0/30, API search vs
+/// mobile search 0/30, mobile home pages 2+3 added only 3/30 more. So
+/// the bulk map from directPreviewUrls() never contains the displayed
+/// videos' viewkeys and no card ever becomes preview-active. (Category
+/// lists do overlap — 31/38 — because both sides parse the site, so
+/// the bulk map still helps there.) The mobile detail page is no help
+/// either: it renders a generic page without the requested video.
+/// The only source that always has the video's own playable URL is its
+/// detail page (flashvars.mediaDefinitions), so the fallback resolves
+/// the preview from there: up to 5 parallel detail fetches (one round,
+/// same as playback), first verified fetch wins, and the LOWEST (240p)
+/// HLS URL is returned as the muted preview clip. A failed resolve
+/// returns '' and the card silently stays on its cover.
+Future<String> directPreviewHls(String viewkey, {int maxAttempts = 5}) async {
+  final results = await Future.wait(
+    List.generate(maxAttempts, (_) => _tryOneFetch(viewkey)),
+  );
+  for (final detail in results) {
+    if (detail == null) continue;
+    // All qualities from one fetch share the same CDN host, and
+    // _tryOneFetch already verified this fetch's start URL — so the
+    // 240p URL from the same fetch is playable too.
+    final hls = detail.hlsSources.toList()
+      ..sort((a, b) => a.height.compareTo(b.height));
+    if (hls.isNotEmpty) return hls.first.url;
+  }
+  return '';
 }

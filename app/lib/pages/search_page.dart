@@ -138,6 +138,16 @@ class _SearchPageState extends State<SearchPage> {
     }
   }
 
+  /// Per-video preview resolve (v0.2.3 HLS fallback): the bulk map
+  /// (mobile list page) never contains API-listed videos, so the
+  /// most-visible card's clip is resolved from its own detail page.
+  Future<String?> _resolvePreview(String viewkey) async {
+    final url = await widget.api.previewHlsFor(viewkey);
+    if (url.isEmpty || !mounted) return null;
+    setState(() => _previews[viewkey] = url);
+    return url;
+  }
+
   void _loadMore() {
     if (_isLoading || _isLoadingMore || _error != null || !_searched) return;
     setState(() => _isLoadingMore = true);
@@ -269,6 +279,7 @@ class _SearchPageState extends State<SearchPage> {
                     if (mounted) setState(() {});
                   },
                   previewUrls: _previews,
+                  onResolvePreview: _resolvePreview,
                   columns: widget.settings.gridColumns,
                 ),
         ),

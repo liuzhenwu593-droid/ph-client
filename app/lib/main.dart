@@ -197,7 +197,21 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
+    const titles = ['首页', '分类', '搜索', '收藏', '历史', '设置'];
+    // Rebuilds when the layout toggle changes the column count.
+    //
+    // The pages list MUST be built inside this builder, not in the
+    // outer build() scope. If the same widget instances are passed on
+    // every rebuild, Element.updateChild reuses them as-is and the page
+    // States never rebuild — v0.2.2 bug: the toggle icon changed but
+    // the list layout stayed put. Fresh instances here force the pages
+    // to rebuild and re-read settings.gridColumns. Page State is
+    // preserved (same type at the same IndexedStack slot), so scroll
+    // position and loaded lists survive the toggle.
+    return ListenableBuilder(
+      listenable: widget.settings,
+      builder: (context, _) {
+        final pages = [
       HomePage(
         api: widget.api,
         favorites: widget.favorites,
@@ -243,11 +257,7 @@ class _MainScreenState extends State<MainScreen> {
         downloads: widget.downloads,
       ),
     ];
-    const titles = ['首页', '分类', '搜索', '收藏', '历史', '设置'];
-    // Rebuilds when the layout toggle changes the column count.
-    return ListenableBuilder(
-      listenable: widget.settings,
-      builder: (context, _) => Scaffold(
+    return Scaffold(
         appBar: AppBar(
           title: Text(titles[_index]),
           // Layout toggle on video lists only: not on the category-name
@@ -270,7 +280,8 @@ class _MainScreenState extends State<MainScreen> {
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
           ],
         ),
-      ),
+    );
+      },
     );
   }
 }

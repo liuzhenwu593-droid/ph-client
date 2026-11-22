@@ -108,6 +108,17 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Per-video preview resolve (v0.2.3 HLS fallback): the bulk map
+  /// (mobile list page) never contains API-listed videos, so the
+  /// most-visible card's clip is resolved from its own detail page.
+  /// The URL is stored in _previews so the card can start playing.
+  Future<String?> _resolvePreview(String viewkey) async {
+    final url = await widget.api.previewHlsFor(viewkey);
+    if (url.isEmpty || !mounted) return null;
+    setState(() => _previews[viewkey] = url);
+    return url;
+  }
+
   void _loadMore() {
     if (_isLoading || _isLoadingMore || _error != null) return;
     setState(() => _isLoadingMore = true);
@@ -150,6 +161,7 @@ class _HomePageState extends State<HomePage> {
           isFavorite: (v) => widget.favorites.isFavorite(v.viewkey),
           onToggleFavorite: _toggleFavorite,
           previewUrls: _previews,
+          onResolvePreview: _resolvePreview,
           columns: widget.settings.gridColumns,
         );
       },

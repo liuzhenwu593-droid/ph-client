@@ -217,6 +217,16 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
     }
   }
 
+  /// Per-video preview resolve (v0.2.3 HLS fallback): the bulk map
+  /// usually covers category lists (31/38 overlap, site vs site), but
+  /// any card it misses is resolved from its own detail page.
+  Future<String?> _resolvePreview(String viewkey) async {
+    final url = await widget.api.previewHlsFor(viewkey);
+    if (url.isEmpty || !mounted) return null;
+    setState(() => _previews[viewkey] = url);
+    return url;
+  }
+
   void _loadMore() {
     if (_isLoading || _isLoadingMore || _error != null) return;
     setState(() => _isLoadingMore = true);
@@ -264,6 +274,7 @@ class _CategoryVideosPageState extends State<CategoryVideosPage> {
               if (mounted) setState(() {});
             },
             previewUrls: _previews,
+            onResolvePreview: _resolvePreview,
             columns: widget.settings.gridColumns,
           ),
         ),

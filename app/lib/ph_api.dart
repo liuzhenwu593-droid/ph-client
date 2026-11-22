@@ -335,6 +335,29 @@ class PhApi {
     return urls;
   }
 
+  /// Per-video preview clip (v0.2.3 HLS fallback): resolves the muted
+  /// preview URL for ONE displayed video via its detail page, because
+  /// the bulk mobile-list map never contains API-listed videos (0/30
+  /// overlap, verified live). Cached 50 minutes (same window as the
+  /// bulk preview map); '' means no preview — the card stays on its
+  /// cover. The clip is the video's own 240p HLS master URL.
+  final Map<String, _PreviewEntry> _previewHlsCache = {};
+
+  Future<String> previewHlsFor(String viewkey) async {
+    final entry = _previewHlsCache[viewkey];
+    if (entry != null &&
+        DateTime.now().millisecondsSinceEpoch - entry.fetchedAt <
+            50 * 60 * 1000) {
+      return entry.urls['hls'] ?? '';
+    }
+    final url = await direct.directPreviewHls(viewkey);
+    _previewHlsCache[viewkey] = _PreviewEntry(
+      fetchedAt: DateTime.now().millisecondsSinceEpoch,
+      urls: {'hls': url},
+    );
+    return url;
+  }
+
   /// Fetch a freshly signed thumbnail URL for one video (stored thumbs
   /// are signed URLs that expire after 24h). Used when a favorite's
   /// cover fails to load. Returns '' when no thumb could be fetched.

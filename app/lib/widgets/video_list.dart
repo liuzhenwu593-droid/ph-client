@@ -167,6 +167,9 @@ class VideoCard extends StatelessWidget {
 /// card (visible fraction >= 0.5) plays its clip, muted and looped;
 /// only one preview plays at a time, and previews stop when the app
 /// goes to the background or a player page is pushed on top.
+/// When the most-visible card has no clip URL yet, [onResolvePreview]
+/// resolves that one video's clip in the background (v0.2.3 HLS
+/// fallback — the bulk map never contains API-listed videos).
 ///
 /// Layout (v0.2.2): [columns] is 1 (the old full-width list), 2 or 3.
 /// In grid mode the cards are compact (16:9 cover + 1-2 line title +
@@ -186,6 +189,7 @@ class VideoListView extends StatefulWidget {
     this.onToggleFavorite,
     this.onRefreshThumb,
     this.previewUrls = const {},
+    this.onResolvePreview,
     this.columns = 1,
     this.emptyText = '没有结果，换个关键词试试',
   });
@@ -203,6 +207,11 @@ class VideoListView extends StatefulWidget {
 
   /// viewkey -> preview mp4 URL. Empty map = no previews for this list.
   final Map<String, String> previewUrls;
+
+  /// Called when the most-visible card has no clip URL yet (v0.2.3):
+  /// the parent resolves that one video's preview (HLS fallback) and
+  /// puts the URL into [previewUrls]. Null = no per-video resolving.
+  final Future<String?> Function(String viewkey)? onResolvePreview;
 
   /// 1 = full-width list (default), 2 or 3 = grid.
   final int columns;
@@ -222,6 +231,14 @@ class _VideoListViewState extends State<VideoListView>
   /// Key of the card currently playing its preview, or null.
   String? _activeKey;
   Timer? _debounce;
+
+  /// Viewkeys with a clip resolve currently in flight (v0.2.3).
+  final Set<String> _resolving = {};
+
+  /// Viewkeys whose last resolve failed, with the failure time: not
+  /// retried for 60s so a stuck card cannot spam the network while it
+  /// stays visible.
+  final Map<String, int> _resolveFailedAt = {};
 
   @override
   void initState() {
@@ -297,20 +314,63 @@ class _VideoListViewState extends State<VideoListView>
       if (_activeKey != null) setState(() => _activeKey = null);
       return;
     }
+    // Most-visible card (fraction >= 0.5), whether or not its clip URL
+    // is known yet. v0.2.2 only considered cards that already had a
+    // URL, so a card whose clip was never resolved could never become
+    // active — and nothing ever resolved it. That is why previews never
+    // played on API-sourced lists: the bulk map never contains those
+    // videos (v0.2.3 root cause, 0/30 overlap verified live).
     String? bestKey;
+    String? bestViewkey;
     var bestFraction = 0.5;
     for (final entry in _fractions.entries) {
       final key = entry.key;
       final fraction = entry.value;
       if (fraction < bestFraction) continue;
-      final viewkey = key.substring(key.indexOf(':') + 1);
-      if ((widget.previewUrls[viewkey] ?? '').isEmpty) continue;
       bestKey = key;
       bestFraction = fraction;
+      bestViewkey = key.substring(key.indexOf(':') + 1);
     }
-    if (bestKey != _activeKey) {
-      setState(() => _activeKey = bestKey);
+    if (bestKey == null || bestViewkey == null) {
+      if (_activeKey != null) setState(() => _activeKey = null);
+      return;
     }
+    final url = widget.previewUrls[bestViewkey];
+    if (url != null && url.isNotEmpty) {
+      if (bestKey != _activeKey) setState(() => _activeKey = bestKey);
+    } else {
+      // Most-visible card has no clip yet: stop any playing preview
+      // and resolve this card's clip in the background (HLS fallback,
+      // v0.2.3). When the URL arrives the parent rebuilds this list
+      // and _evaluate runs again via didUpdateWidget.
+      if (_activeKey != null) setState(() => _activeKey = null);
+      _maybeResolvePreview(bestViewkey);
+    }
+  }
+
+  /// Resolve one video's preview clip in the background (at most one
+  /// in-flight request per video; failures are not retried for 60s).
+  void _maybeResolvePreview(String viewkey) {
+    final resolve = widget.onResolvePreview;
+    if (resolve == null) return;
+    if (_resolving.contains(viewkey)) return;
+    final failedAt = _resolveFailedAt[viewkey];
+    if (failedAt != null &&
+        DateTime.now().millisecondsSinceEpoch - failedAt < 60000) {
+      return;
+    }
+    _resolving.add(viewkey);
+    resolve(viewkey).then((url) {
+      _resolving.remove(viewkey);
+      if (url == null || url.isEmpty) {
+        _resolveFailedAt[viewkey] = DateTime.now().millisecondsSinceEpoch;
+      }
+      // The parent stores a good URL in previewUrls; didUpdateWidget
+      // re-evaluates and starts the preview.
+    }).catchError((_) {
+      _resolving.remove(viewkey);
+      _resolveFailedAt[viewkey] = DateTime.now().millisecondsSinceEpoch;
+    });
   }
 
   @override
