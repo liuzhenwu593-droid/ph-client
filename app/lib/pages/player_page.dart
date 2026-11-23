@@ -10,8 +10,11 @@ import '../downloads.dart';
 import '../local_store.dart';
 import '../models.dart';
 import '../ph_api.dart';
+import '../ph_parse.dart' as direct;
 import '../settings.dart';
+import '../widgets/thumb_image.dart';
 import '../widgets/video_list.dart';
+import 'author_page.dart';
 
 /// Playback speeds offered in the player menu (shared by the state and
 /// the controls overlay below).
@@ -185,6 +188,38 @@ class _PlayerPageState extends State<PlayerPage> {
     } catch (_) {
       // Related videos are a bonus: never fail playback for them.
     }
+  }
+
+  /// "357 Videos  •  2.1M Subscribers", or '' when neither is known.
+  String _authorMeta(AuthorInfo author) {
+    return [
+      if (author.videosText.isNotEmpty) author.videosText,
+      if (author.subscribersText.isNotEmpty) author.subscribersText,
+    ].join('  •  ');
+  }
+
+  void _openAuthor(AuthorInfo author) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AuthorPage(
+          author: author,
+          api: widget.api,
+          favorites: widget.favorites,
+          watch: widget.watch,
+          settings: widget.settings,
+          downloads: widget.downloads,
+        ),
+      ),
+    );
+  }
+
+  /// Pornstar chip (v0.2.8 bonus): the API already carries
+  /// pornstars[].pornstar_name, so tapping one opens that pornstar's
+  /// video list at `/pornstar/<slug>/videos`.
+  void _openPornstar(String name) {
+    _openAuthor(
+      AuthorInfo(name: name, path: '/pornstar/${direct.pornstarSlug(name)}'),
+    );
   }
 
   /// Creates and initialises a controller. Returns true on success.
@@ -643,6 +678,7 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   Widget build(BuildContext context) {
     final detail = _detail;
+    final author = detail?.author;
     final controller = _controller;
 
     if (_isFullscreen) {
@@ -701,6 +737,61 @@ class _PlayerPageState extends State<PlayerPage> {
                 '${_isLocal ? '  •  本地视频' : ''}',
                 style: TextStyle(color: Colors.grey.shade400),
               ),
+              // Author row (v0.2.8): from the detail page's about tab.
+              // Hidden when the detail has no author (backend, old
+              // cache, or a page without the block) — never a crash.
+              if (author != null) ...[
+                const SizedBox(height: 12),
+                InkWell(
+                  onTap: () => _openAuthor(author),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        if (author.avatarUrl.isNotEmpty)
+                          ClipOval(
+                            child: ThumbImage(
+                              url: author.avatarUrl,
+                              width: 40,
+                              height: 40,
+                              fit: BoxFit.cover,
+                              compact: true,
+                            ),
+                          )
+                        else
+                          const CircleAvatar(
+                            radius: 20,
+                            child: Icon(Icons.person),
+                          ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                author.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (_authorMeta(author).isNotEmpty)
+                                Text(
+                                  _authorMeta(author),
+                                  style: TextStyle(
+                                    color: Colors.grey.shade400,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: Colors.grey),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
               if (detail != null && detail.sources.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Row(
@@ -740,6 +831,28 @@ class _PlayerPageState extends State<PlayerPage> {
                         (t) => Chip(
                           label: Text(t),
                           visualDensity: VisualDensity.compact,
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
+              // Performers (v0.2.8 bonus): only API-sourced videos carry
+              // pornstars; site-parsed lists leave this empty and the
+              // row is simply hidden. Tapping one opens that
+              // pornstar's video list.
+              if (widget.video.pornstars.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: widget.video.pornstars
+                      .take(8)
+                      .map(
+                        (p) => ActionChip(
+                          avatar: const Icon(Icons.person, size: 16),
+                          label: Text(p),
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _openPornstar(p),
                         ),
                       )
                       .toList(),

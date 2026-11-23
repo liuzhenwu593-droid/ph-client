@@ -289,6 +289,9 @@ Future<VideoDetail?> _tryOneFetch(String viewkey) async {
           : 0,
       thumb: (flashvars['image_url'] ?? '').toString(),
       sources: sources,
+      // Same fetch, no extra request: the author comes from the about
+      // tab of this very page (see extractAuthor).
+      author: extractAuthor(html),
     );
     final start = detail.startSource;
     if (start != null && await _verifyHls(start.url, viewkey)) {
@@ -712,6 +715,256 @@ Future<SiteSearchPage> directSiteHome({int page = 1}) async {
     }
   }
   throw lastError ?? ParseException('site home failed');
+}
+
+/// Balanced-<ul> extraction that returns null instead of throwing,
+/// for trying several candidate sections in priority order.
+String? _balancedUlSectionOrNull(String html, RegExp openRe) {
+  final open = openRe.firstMatch(html);
+  if (open == null) return null;
+  var depth = 0;
+  final tagRe = RegExp(r'</?ul\b[^>]*>');
+  for (final m in tagRe.allMatches(html, open.start)) {
+    if (m.group(0)!.startsWith('</')) {
+      depth--;
+    } else {
+      depth++;
+    }
+    if (depth == 0) return html.substring(open.start, m.end);
+  }
+  return null;
+}
+
+/// Parse the main video list out of a mobile author page (v0.2.8): a
+/// channel / model / user profile, or a pornstar's /videos page.
+/// Section priority (verified live 2026-11-24):
+///   1. `<ul id="mostRecentSection">` (channels, 35 cards)
+///   2. `<ul id="mostRecentVideosSection">` (pornstars, 36 cards)
+///   3. `<ul id="uploadedVideosSection">` (pornstars, fallback, 5 cards)
+///   4. the first <ul class="... videoList ..."> that is not the
+///      shorties strip (models' /videos page, users, generic fallback).
+/// Cards carry the same fields as mobile search cards, except the
+/// duration/views markup differs by page type — channel cards use
+/// `<span class="time">` + `<div class="views">` (home style),
+/// model/pornstar cards use `<span class="bgEffect time">` +
+/// `<div class="videoViews">` (search style) — so both forms are tried.
+/// Throws [ParseException] when no list section or no cards are found.
+SiteSearchPage parseAuthorList(String html) {
+  final candidates = <String>[];
+  for (final pattern in <RegExp>[
+    RegExp(r'<ul[^>]*id="mostRecentSection"[^>]*>'),
+    RegExp(r'<ul[^>]*id="mostRecentVideosSection"[^>]*>'),
+    RegExp(r'<ul[^>]*id="uploadedVideosSection"[^>]*>'),
+  ]) {
+    final section = _balancedUlSectionOrNull(html, pattern);
+    if (section != null) candidates.add(section);
+  }
+  if (candidates.isEmpty) {
+    // Generic fallback: first videoList <ul> that is not the shorties
+    // strip (modelShorties__recent__videos).
+    final ulRe = RegExp(r'<ul[^>]*class="[^"]*videoList[^"]*"[^>]*>');
+    for (final m in ulRe.allMatches(html)) {
+      if (m.group(0)!.contains('modelShorties')) continue;
+      final section = _balancedUlSectionOrNull(
+        html,
+        RegExp(RegExp.escape(m.group(0)!)),
+      );
+      if (section != null) candidates.add(section);
+      break;
+    }
+  }
+  for (final section in candidates) {
+    final page = _parseAuthorCards(section);
+    if (page.videos.isNotEmpty) return page;
+  }
+  throw ParseException('author video list not found');
+}
+
+/// One author-list section's cards, in page order. Same fields as
+/// mobile search cards (see parseSiteSearch), with both duration/views
+/// markup variants accepted.
+SiteSearchPage _parseAuthorCards(String section) {
+  final itemRe = RegExp(
+    r'<li\b[^>]*data-video-vkey="([0-9a-z]+)"[^>]*>.*?</li>',
+    dotAll: true,
+  );
+  final videos = <VideoItem>[];
+  final previews = <String, String>{};
+  for (final match in itemRe.allMatches(section)) {
+    final block = match.group(0)!;
+    final vkey = match.group(1)!;
+    var title =
+        RegExp(r'alt="([^"]+)"').firstMatch(block)?.group(1) ?? '';
+    if (title.isEmpty) {
+      final titleMatch = RegExp(
+        r'<div class="title">\s*<a[^>]*>(.*?)</a>',
+        dotAll: true,
+      ).firstMatch(block);
+      title = titleMatch == null
+          ? ''
+          : titleMatch
+                .group(1)!
+                .replaceAll(RegExp(r'<[^>]*>'), '')
+                .trim();
+    }
+    title = _unescapeHtml(title).trim();
+    if (title.isEmpty) continue;
+    var thumb =
+        RegExp(r'data-poster="(https://[^"]*phncdn[^"]*)"')
+                .firstMatch(block)
+                ?.group(1) ??
+            RegExp(r'src="(https://[^"]*phncdn[^"]*)"')
+                .firstMatch(block)
+                ?.group(1) ??
+        '';
+    thumb = _unescapeHtml(thumb);
+    final duration =
+        RegExp(r'class="bgEffect time">([^<]+)<')
+                .firstMatch(block)
+                ?.group(1)
+                ?.trim() ??
+            RegExp(r'<span class="time">([^<]+)</span>')
+                .firstMatch(block)
+                ?.group(1)
+                ?.trim() ??
+        '';
+    var views = 0;
+    final viewsMatch =
+        RegExp(
+          r'class="videoViews">.*?([\d.,]+)\s*([KM])?<',
+          dotAll: true,
+        ).firstMatch(block) ??
+        RegExp(
+          r'<div class="views">\s*([\d.,]+)\s*([KM])?',
+        ).firstMatch(block);
+    if (viewsMatch != null) {
+      views = _parseSiteViews(
+        '${viewsMatch.group(1) ?? ''}${viewsMatch.group(2) ?? ''}',
+      );
+    }
+    final webm = RegExp(r'data-webm="([^"]+)"').firstMatch(block)?.group(1);
+    videos.add(
+      VideoItem(
+        viewkey: vkey,
+        title: title,
+        duration: duration,
+        views: views,
+        rating: 0,
+        thumb: thumb,
+        url: '$_base/view_video.php?viewkey=$vkey',
+      ),
+    );
+    if (webm != null && webm.contains('_fb.mp4')) {
+      previews[vkey] = _unescapeHtml(webm);
+    }
+  }
+  return SiteSearchPage(videos: videos, previews: previews);
+}
+
+/// One author's videos via their mobile profile page (v0.2.8).
+///
+/// URL rules (verified live 2026-11-24): `/channels/<slug>` and
+/// `/users/<slug>` list on the profile page itself (?page=N works, 0
+/// overlap p1/p2); `/model/<slug>` and `/pornstar/<slug>` need the /videos
+/// subpage (the profile page ignores ?page=, /videos paginates 36
+/// fresh videos per page). See [AuthorInfo.videosUrl].
+/// Throws [ParseException] when the fetch fails or no cards are found.
+Future<SiteSearchPage> directAuthorVideos(
+  String authorPath, {
+  int page = 1,
+}) async {
+  final base = AuthorInfo(name: '', path: authorPath).videosUrl;
+  final url = '$base?page=$page';
+  ParseException? lastError;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      final html = await _getString(
+        url,
+        userAgent: _mobileUserAgent,
+        extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
+      );
+      return parseAuthorList(html);
+    } on ParseException catch (e) {
+      lastError = e;
+      if (attempt == 0) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+  }
+  throw lastError ?? ParseException('author videos failed');
+}
+
+/// The current video's author, from the desktop detail page's "about"
+/// tab (v0.2.8).
+///
+/// Anchor: the single `video-detailed-info` block (exactly one per
+/// page, verified live on 8 videos) -> `usernameWrap clearfix` -> the
+/// first `<a href="/channels|/model|/users|/pornstar/...">`. The avatar
+/// comes from the `userAvatar` img in the same block, and the "357
+/// Videos" / "2.1M Subscribers" spans right after the usernameWrap.
+///
+/// Do NOT anchor on `.videoUploaderBlock`: the page carries ~77 of
+/// those and they all belong to related video cards — the first one is
+/// a related video's uploader, not this video's. Returns null when the
+/// page has no author block; the caller hides the author row then.
+AuthorInfo? extractAuthor(String html) {
+  final infoAt = html.indexOf('video-detailed-info');
+  if (infoAt < 0) return null;
+  // Bound the scan: the whole about-tab user block is ~2 KB.
+  final end = (infoAt + 8000).clamp(0, html.length);
+  final window = html.substring(infoAt, end);
+  final wrap = RegExp(
+    r'<div class="usernameWrap clearfix"[^>]*>(.*?)</div>',
+    dotAll: true,
+  ).firstMatch(window);
+  if (wrap == null) return null;
+  final link = RegExp(
+    r'<a [^>]*href="(/[^"]+)"[^>]*>(.*?)</a>',
+    dotAll: true,
+  ).firstMatch(wrap.group(1)!);
+  if (link == null) return null;
+  final path = link.group(1)!;
+  if (!path.startsWith('/channels/') &&
+      !path.startsWith('/model/') &&
+      !path.startsWith('/users/') &&
+      !path.startsWith('/pornstar/')) {
+    return null;
+  }
+  final name = _unescapeHtml(
+    link.group(2)!.replaceAll(RegExp(r'<[^>]*>'), '').trim(),
+  );
+  if (name.isEmpty) return null;
+  var avatarUrl = '';
+  final avatar = RegExp(
+    r'<div class="userAvatar">.*?<img[^>]*src="([^"]+)"',
+    dotAll: true,
+  ).firstMatch(window);
+  if (avatar != null) avatarUrl = _unescapeHtml(avatar.group(1)!);
+  final tail = window.substring(wrap.end);
+  final videos = RegExp(
+    r'<span>([\d.,]+\s*[KM]?)\s*Videos</span>',
+  ).firstMatch(tail)?.group(1)?.trim();
+  final subs = RegExp(
+    r'<span>([\d.,]+\s*[KM]?)\s*Subscribers</span>',
+  ).firstMatch(tail)?.group(1)?.trim();
+  return AuthorInfo(
+    name: name,
+    path: path,
+    avatarUrl: avatarUrl,
+    videosText: videos == null ? '' : '$videos Videos',
+    subscribersText: subs == null ? '' : '$subs Subscribers',
+  );
+}
+
+/// "Alex Adams" -> "alex-adams", "Savannah Stéele" ->
+/// "savannah-st%C3%A9ele" (the site percent-encodes non-ASCII in
+/// pornstar slugs). Used for the pornstar chips on the player page.
+String pornstarSlug(String name) {
+  final slug = name
+      .toLowerCase()
+      .replaceAll("'", '')
+      .replaceAll(RegExp(r'\s+'), '-');
+  return Uri.encodeComponent(slug);
 }
 
 /// Per-video preview clip for the exact videos the app shows (v0.2.3).

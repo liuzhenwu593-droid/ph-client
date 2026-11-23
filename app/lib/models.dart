@@ -1,6 +1,63 @@
 // Plain data models. No Flutter imports: this file is analyzable with a
 // standalone Dart SDK (see README.md).
 
+/// The uploader/author of one video (v0.2.8).
+///
+/// Parsed from the desktop detail page's "about" tab
+/// (`video-detailed-info` -> `usernameWrap clearfix`): it is the ONLY
+/// author block that belongs to the current video. The page also
+/// carries ~77 `.videoUploaderBlock` divs, but those belong to related
+/// video cards — the first one is a related video's uploader, NOT this
+/// video's (verified live 2026-11-24: the first block on
+/// ph5a7f1ba584481 says "Net Video Girls" while the about tab says
+/// "Alex Adams", the actual author). [path] is one of
+/// `/channels/<slug>`, `/model/<slug>`, `/users/<slug>`, `/pornstar/<slug>`.
+class AuthorInfo {
+  const AuthorInfo({
+    required this.name,
+    required this.path,
+    this.avatarUrl = '',
+    this.videosText = '',
+    this.subscribersText = '',
+  });
+
+  factory AuthorInfo.fromJson(Map<String, dynamic> json) => AuthorInfo(
+    name: (json['name'] ?? '').toString(),
+    path: (json['path'] ?? '').toString(),
+    avatarUrl: (json['avatarUrl'] ?? '').toString(),
+    videosText: (json['videosText'] ?? '').toString(),
+    subscribersText: (json['subscribersText'] ?? '').toString(),
+  );
+
+  final String name;
+  final String path;
+  final String avatarUrl;
+
+  /// Raw labels from the about tab, e.g. "357 Videos", "2.1M Subscribers".
+  final String videosText;
+  final String subscribersText;
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'path': path,
+    'avatarUrl': avatarUrl,
+    'videosText': videosText,
+    'subscribersText': subscribersText,
+  };
+
+  /// The list URL for this author's videos. Channels and users list on
+  /// their profile page (?page=N works); models and pornstars need the
+  /// /videos subpage — the profile page ignores ?page= (verified live
+  /// 2026-11-24: /model/luxury-girl?page=2 repeats page 1, while
+  /// /model/luxury-girl/videos?page=2 gives 36 fresh videos).
+  String get videosUrl {
+    if (path.startsWith('/model/') || path.startsWith('/pornstar/')) {
+      return 'https://www.pornhub.com$path/videos';
+    }
+    return 'https://www.pornhub.com$path';
+  }
+}
+
 class VideoItem {
   const VideoItem({
     required this.viewkey,
@@ -13,6 +70,7 @@ class VideoItem {
     this.publishDate = '',
     this.tags = const [],
     this.categories = const [],
+    this.pornstars = const [],
   });
 
   factory VideoItem.fromJson(Map<String, dynamic> json) {
@@ -42,6 +100,7 @@ class VideoItem {
       publishDate: (json['publish_date'] ?? '').toString(),
       tags: strings(json['tags']),
       categories: strings(json['categories']),
+      pornstars: strings(json['pornstars']),
     );
   }
 
@@ -56,6 +115,10 @@ class VideoItem {
   final List<String> tags;
   final List<String> categories;
 
+  /// Performer names from the Webmasters API (`pornstars[].pornstar_name`).
+  /// Only API-sourced items carry them; site-parsed lists leave this empty.
+  final List<String> pornstars;
+
   Map<String, dynamic> toJson() => {
     'viewkey': viewkey,
     'title': title,
@@ -67,6 +130,7 @@ class VideoItem {
     'publish_date': publishDate,
     'tags': tags,
     'categories': categories,
+    'pornstars': pornstars,
   };
 
   /// "7:24" -> 444, "1:02:03" -> 3723. Used by the duration filter.
@@ -136,6 +200,7 @@ class VideoDetail {
     required this.duration,
     required this.thumb,
     required this.sources,
+    this.author,
   });
 
   factory VideoDetail.fromJson(Map<String, dynamic> json) {
@@ -156,6 +221,9 @@ class VideoDetail {
           : int.tryParse((json['duration'] ?? '').toString()) ?? 0,
       thumb: (json['thumb'] ?? '').toString(),
       sources: sources,
+      author: json['author'] is Map<String, dynamic>
+          ? AuthorInfo.fromJson(json['author'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -165,12 +233,19 @@ class VideoDetail {
   final String thumb;
   final List<VideoSource> sources;
 
+  /// The video's author (v0.2.8), parsed from the detail page's about
+  /// tab. Null when the detail came from the backend or an old cache
+  /// entry, or when the page had no author block — the player hides the
+  /// author row then instead of crashing.
+  final AuthorInfo? author;
+
   Map<String, dynamic> toJson() => {
     'viewkey': viewkey,
     'title': title,
     'duration': duration,
     'thumb': thumb,
     'sources': sources.map((s) => s.toJson()).toList(),
+    if (author != null) 'author': author!.toJson(),
   };
 
   /// HLS first, highest quality first — same order the backend returns.

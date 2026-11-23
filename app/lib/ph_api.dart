@@ -366,6 +366,43 @@ class PhApi {
     return items;
   }
 
+  /// One author's videos (v0.2.8): direct parsing only — the backend
+  /// has no /api/author endpoint. The preview clip map from the same
+  /// fetch goes into the preview cache so the author page does not
+  /// fetch the same page a second time. An empty list is NOT an error
+  /// here (the author may genuinely have no videos on this page); the
+  /// page shows its empty state. Only a fetch/parse failure throws.
+  Future<List<VideoItem>> authorVideos(
+    String authorPath, {
+    int page = 1,
+    bool forceRefresh = false,
+  }) async {
+    final key = 'author:$authorPath:$page';
+    if (!forceRefresh) {
+      final cached = lists.peek(key);
+      if (cached != null) return cached;
+    }
+    late final List<VideoItem> items;
+    try {
+      final authorPage = await direct.directAuthorVideos(
+        authorPath,
+        page: page,
+      );
+      items = authorPage.videos;
+      if (authorPage.previews.isNotEmpty) {
+        _previewCache[_previewKey(authorPath: authorPath, page: page)] =
+            _PreviewEntry(
+              fetchedAt: DateTime.now().millisecondsSinceEpoch,
+              urls: authorPage.previews,
+            );
+      }
+    } on direct.ParseException {
+      throw ApiException('加载失败，请重试');
+    }
+    lists.put(key, items);
+    return items;
+  }
+
   Future<VideoDetail> video(String viewkey, {bool forceRefresh = false}) async {
     if (!forceRefresh) {
       final cached = _cache?.get(viewkey);
@@ -410,25 +447,47 @@ class PhApi {
     int? categoryId,
     int page = 1,
     String? ordering,
-  }) => 'preview:${query ?? ''}:${categoryId ?? ''}:$page:${ordering ?? ''}';
+    String? authorPath,
+  }) =>
+      'preview:${query ?? ''}:${categoryId ?? ''}:$page:${ordering ?? ''}:${authorPath ?? ''}';
 
   Future<Map<String, String>> previewUrls({
     String? query,
     int? categoryId,
     int page = 1,
     String? ordering,
+    String? authorPath,
   }) async {
     final key = _previewKey(
       query: query,
       categoryId: categoryId,
       page: page,
       ordering: ordering,
+      authorPath: authorPath,
     );
     final entry = _previewCache[key];
     if (entry != null &&
         DateTime.now().millisecondsSinceEpoch - entry.fetchedAt <
             50 * 60 * 1000) {
       return entry.urls;
+    }
+    // Author pages have their own list URL: never fall through to the
+    // search/category/home preview fetch below — that would store the
+    // wrong page's clip map under this author key.
+    if (authorPath != null) {
+      try {
+        final authorPage = await direct.directAuthorVideos(
+          authorPath,
+          page: page,
+        );
+        _previewCache[key] = _PreviewEntry(
+          fetchedAt: DateTime.now().millisecondsSinceEpoch,
+          urls: authorPage.previews,
+        );
+        return authorPage.previews;
+      } on direct.ParseException {
+        return {};
+      }
     }
     final urls = await direct.directPreviewUrls(
       query: query,
