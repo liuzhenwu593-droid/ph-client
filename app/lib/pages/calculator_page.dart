@@ -122,9 +122,9 @@ class _CalculatorPageState extends State<CalculatorPage> {
       final cur = _currentNumber;
       if (cur.isEmpty) return;
       if (cur.startsWith('−')) {
-        _expr = _expr.substring(0, start) + cur.substring(1);
+        _expr = '${_expr.substring(0, start)}${cur.substring(1)}';
       } else {
-        _expr = _expr.substring(0, start) + '−' + cur;
+        _expr = '${_expr.substring(0, start)}−$cur';
       }
       _display = _currentNumber;
     });
@@ -287,6 +287,13 @@ class _CalculatorPageState extends State<CalculatorPage> {
       ['1', '2', '3', '+'],
       ['±', '0', '.', '='],
     ];
+    // Compact, stock-calculator layout (v0.2.7): fixed-size keys and a
+    // compact display instead of the old full-screen stretched grid.
+    // The display flexes to fill the space above the keypad; the keys
+    // stay 64dp tall with tight 8dp gaps, and the keypad is capped at
+    // 420dp wide so it never stretches edge to edge. Everything fits
+    // on one screen with no scrolling. Logic, trigger rule (5×5 + =),
+    // and colours are unchanged.
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -295,7 +302,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
             Expanded(
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
                 alignment: Alignment.bottomRight,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -307,10 +314,10 @@ class _CalculatorPageState extends State<CalculatorPage> {
                       textAlign: TextAlign.right,
                       style: TextStyle(
                         color: Colors.grey.shade400,
-                        fontSize: 22,
+                        fontSize: 20,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 6),
                     Text(
                       _display,
                       maxLines: 1,
@@ -318,7 +325,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 56,
+                        fontSize: 44,
                         fontWeight: FontWeight.w300,
                       ),
                     ),
@@ -326,16 +333,34 @@ class _CalculatorPageState extends State<CalculatorPage> {
                 ),
               ),
             ),
-            for (final row in rows)
-              Expanded(
-                child: Row(
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    for (final label in row)
-                      Expanded(child: _KeyButton(label: label, onPress: _press)),
+                    for (var i = 0; i < rows.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 8),
+                      SizedBox(
+                        height: 64,
+                        child: Row(
+                          children: [
+                            for (final label in rows[i])
+                              Expanded(
+                                child: _KeyButton(
+                                  label: label,
+                                  onPress: _press,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-            const SizedBox(height: 8),
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -360,19 +385,19 @@ class _KeyButton extends StatelessWidget {
             : const Color(0xFF333333);
     final textColor = isFunction ? Colors.black : Colors.white;
     return Padding(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(4),
       child: FilledButton(
         onPressed: () => onPress(label),
         style: FilledButton.styleFrom(
           backgroundColor: color,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(20),
           ),
           padding: EdgeInsets.zero,
         ),
         child: Text(
           label,
-          style: TextStyle(color: textColor, fontSize: 28),
+          style: TextStyle(color: textColor, fontSize: 26),
         ),
       ),
     );

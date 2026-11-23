@@ -93,7 +93,12 @@ class _HomePageState extends State<HomePage> {
         _isLoading = false;
         _isLoadingMore = false;
         // A failed background refresh must not wipe the cached list.
-        if (!background) _error = '加载失败：$e';
+        // ApiException already carries a user-facing message (e.g.
+        // "加载失败，请重试" when both home sources fail); anything else
+        // keeps the old "加载失败：<error>" text.
+        if (!background) {
+          _error = e is ApiException ? e.message : '加载失败：$e';
+        }
       });
     }
   }

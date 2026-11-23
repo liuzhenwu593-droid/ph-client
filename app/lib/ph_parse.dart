@@ -45,6 +45,21 @@ class ParseException implements Exception {
   String toString() => 'ParseException: $message';
 }
 
+/// The Webmasters API answered with an error object instead of a video
+/// list, e.g. {"code":"2001","message":"No Videos found!"}.
+///
+/// This is a VALID API answer (the query itself is rejected), not a
+/// malformed response — so it is a [ParseException] subtype callers can
+/// catch separately and fall back to another source. It deliberately
+/// keeps [ParseException]'s toString ("ParseException: ...") so existing
+/// error displays do not change shape.
+///
+/// Seen live 2026-11-23: empty search + period=weekly answers 2001,
+/// while the same call without period returns 30 videos.
+class ApiNoVideosException extends ParseException {
+  ApiNoVideosException(super.message);
+}
+
 Future<String> _getString(
   String url, {
   Map<String, String>? extraHeaders,
@@ -73,6 +88,11 @@ Future<String> _getString(
 }
 
 /// Webmasters search. Empty [query] + ordering=mostviewed is the Home feed.
+/// NOTE: do NOT pass period=weekly with an empty query — the API now
+/// answers {"code":"2001","message":"No Videos found!"} for that
+/// combination (verified live 2026-11-23). Home calls this with
+/// period: '' (ordering=mostviewed alone returns 30 videos); search
+/// calls keep the default period because a non-empty search term works.
 Future<List<VideoItem>> directSearch(
   String query, {
   int page = 1,
@@ -87,6 +107,15 @@ Future<List<VideoItem>> directSearch(
   final body = await _getString(url);
   final data = jsonDecode(body);
   if (data is! Map || data['videos'] is! List) {
+    if (data is Map) {
+      final code = data['code']?.toString() ?? '';
+      final message = data['message']?.toString() ?? '';
+      if (code.isNotEmpty || message.isNotEmpty) {
+        throw ApiNoVideosException(
+          message.isNotEmpty ? message : 'No videos found (code $code)',
+        );
+      }
+    }
     throw ParseException('unexpected Webmasters search shape');
   }
   return (data['videos'] as List)
@@ -410,14 +439,13 @@ int _parseSiteViews(String raw) {
   return value.round();
 }
 
-/// Extract the <ul id="videoListSearchResults"> ... </ul> section with a
-/// balanced scan: cards contain nested <ul> menus, so the first </ul>
-/// after the opening tag is NOT the end of the list.
-String _searchResultsSection(String html) {
-  final open =
-      RegExp(r'<ul[^>]*id="videoListSearchResults"[^>]*>').firstMatch(html);
+/// Extract a <ul>...</ul> section with a balanced scan: cards contain
+/// nested <ul> menus, so the first </ul> after the opening tag is NOT
+/// the end of the list.
+String _balancedUlSection(String html, RegExp openRe, String notFound) {
+  final open = openRe.firstMatch(html);
   if (open == null) {
-    throw ParseException('videoListSearchResults not found');
+    throw ParseException(notFound);
   }
   var depth = 0;
   final tagRe = RegExp(r'</?ul\b[^>]*>');
@@ -429,8 +457,15 @@ String _searchResultsSection(String html) {
     }
     if (depth == 0) return html.substring(open.start, m.end);
   }
-  throw ParseException('videoListSearchResults not closed');
+  throw ParseException('$notFound (not closed)');
 }
+
+/// Extract the <ul id="videoListSearchResults"> ... </ul> section.
+String _searchResultsSection(String html) => _balancedUlSection(
+  html,
+  RegExp(r'<ul[^>]*id="videoListSearchResults"[^>]*>'),
+  'videoListSearchResults not found',
+);
 
 /// Parse the main result list out of a mobile search page. Returns the
 /// videos in site order. Only <li class="videoSearchList_*"> cards are
@@ -558,6 +593,125 @@ Future<SiteSearchPage> directSiteSearch(
     }
   }
   throw lastError ?? ParseException('site search failed');
+}
+
+/// Parse the main video list out of a mobile home page
+/// (`/video?o=mv&t=w`). The main list is the
+/// `<ul class="videoList clearfix browseVideo-tabSplit">` — the other
+/// videoList sections on the page (filter dropdowns, the scrollable
+/// strip) are NOT the feed. Returns the videos in site order plus the
+/// per-card preview clip URLs from the same fetch. Throws
+/// [ParseException] when the page layout is not recognised or no video
+/// cards are found.
+///
+/// Verified live 2026-11-23 (sandbox, mobile UA): page 1 = 31 cards,
+/// page 2 = 43 cards, 0 overlap; every card carries data-video-vkey,
+/// img alt title, data-poster thumb, <span class="time"> duration,
+/// <div class="views"> views, and a data-webm preview clip.
+SiteSearchPage parseSiteHome(String html) {
+  final section = _balancedUlSection(
+    html,
+    RegExp(r'<ul[^>]*class="[^"]*browseVideo-tabSplit[^"]*"[^>]*>'),
+    'home video list not found',
+  );
+  final itemRe = RegExp(
+    r'<li\b[^>]*data-video-vkey="([0-9a-z]+)"[^>]*>.*?</li>',
+    dotAll: true,
+  );
+  final videos = <VideoItem>[];
+  final previews = <String, String>{};
+  for (final match in itemRe.allMatches(section)) {
+    final block = match.group(0)!;
+    final vkey = match.group(1)!;
+    var title =
+        RegExp(r'alt="([^"]+)"').firstMatch(block)?.group(1) ?? '';
+    if (title.isEmpty) {
+      final titleMatch = RegExp(
+        r'<div class="title">\s*<a[^>]*>(.*?)</a>',
+        dotAll: true,
+      ).firstMatch(block);
+      title = titleMatch == null
+          ? ''
+          : titleMatch
+                .group(1)!
+                .replaceAll(RegExp(r'<[^>]*>'), '')
+                .trim();
+    }
+    title = _unescapeHtml(title).trim();
+    if (title.isEmpty) continue;
+    var thumb =
+        RegExp(r'data-poster="(https://[^"]*phncdn[^"]*)"')
+                .firstMatch(block)
+                ?.group(1) ??
+            RegExp(r'src="(https://[^"]*phncdn[^"]*)"')
+                .firstMatch(block)
+                ?.group(1) ??
+        '';
+    thumb = _unescapeHtml(thumb);
+    final duration =
+        RegExp(r'<span class="time">([^<]+)</span>')
+            .firstMatch(block)
+            ?.group(1)
+            ?.trim() ??
+        '';
+    final viewsMatch = RegExp(
+      r'<div class="views">\s*([\d.,]+)\s*([KM])?',
+    ).firstMatch(block);
+    final views = viewsMatch == null
+        ? 0
+        : _parseSiteViews(
+            '${viewsMatch.group(1) ?? ''}${viewsMatch.group(2) ?? ''}',
+          );
+    final webm = RegExp(r'data-webm="([^"]+)"').firstMatch(block)?.group(1);
+    videos.add(
+      VideoItem(
+        viewkey: vkey,
+        title: title,
+        duration: duration,
+        views: views,
+        // Cards carry no rating on the site; the home feed is
+        // server-ordered (most viewed, weekly).
+        rating: 0,
+        thumb: thumb,
+        url: '$_base/view_video.php?viewkey=$vkey',
+      ),
+    );
+    if (webm != null && webm.contains('_fb.mp4')) {
+      previews[vkey] = _unescapeHtml(webm);
+    }
+  }
+  if (videos.isEmpty) {
+    throw ParseException('no videos parsed from site home');
+  }
+  return SiteSearchPage(videos: videos, previews: previews);
+}
+
+/// Home feed via the mobile website's own home page (v0.2.7 fallback).
+///
+/// The Webmasters home call (empty search + period=weekly) now answers
+/// {"code":"2001","message":"No Videos found!"} (verified live
+/// 2026-11-23), so Home falls back here when the API fails or answers
+/// 2001. Same videos and order as the mobile site's home feed.
+/// Throws [ParseException] when the fetch fails or no cards are found,
+/// so the caller can show its own friendly error.
+Future<SiteSearchPage> directSiteHome({int page = 1}) async {
+  ParseException? lastError;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      final html = await _getString(
+        mobileListUrl(page: page),
+        userAgent: _mobileUserAgent,
+        extraHeaders: {HttpHeaders.refererHeader: '$_base/'},
+      );
+      return parseSiteHome(html);
+    } on ParseException catch (e) {
+      lastError = e;
+      if (attempt == 0) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+  }
+  throw lastError ?? ParseException('site home failed');
 }
 
 /// Per-video preview clip for the exact videos the app shows (v0.2.3).

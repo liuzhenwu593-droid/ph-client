@@ -185,7 +185,34 @@ class PhApi {
         // Fall through to direct parsing below.
       }
     }
-    items = await direct.directSearch('', page: page);
+    // Webmasters home call WITHOUT period: empty search + period=weekly
+    // now answers {"code":"2001","message":"No Videos found!"}
+    // (verified live 2026-11-23); ordering=mostviewed alone returns 30
+    // videos. Any API failure (2001, changed shape, network) falls
+    // through to the mobile site home page below.
+    try {
+      items = await direct.directSearch('', page: page, period: '');
+    } catch (_) {
+      items = <VideoItem>[];
+    }
+    if (items.isEmpty) {
+      // Mobile site home page (?o=mv&t=w) — same list the user sees on
+      // the mobile site. Its preview map goes into the preview cache so
+      // the home page does not fetch the same page a second time.
+      try {
+        final sitePage = await direct.directSiteHome(page: page);
+        if (sitePage.videos.isNotEmpty) {
+          _previewCache[_previewKey(page: page)] = _PreviewEntry(
+            fetchedAt: DateTime.now().millisecondsSinceEpoch,
+            urls: sitePage.previews,
+          );
+          items = sitePage.videos;
+        }
+      } catch (_) {
+        // Both sources failed — friendly error below.
+      }
+    }
+    if (items.isEmpty) throw ApiException('加载失败，请重试');
     lists.put(key, items);
     return items;
   }
