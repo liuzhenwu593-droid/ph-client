@@ -35,7 +35,6 @@ import 'list_cache.dart';
 import 'models.dart';
 import 'ph_parse.dart' as direct;
 import 'play_cache.dart';
-import 'proxy_client.dart';
 import 'site_list.dart' as site;
 
 class ApiException implements Exception {
@@ -136,8 +135,7 @@ class PhApi {
   Future<Map<String, dynamic>> _getBackendJson(String path) async {
     final base = _backendUrl;
     if (base == null) throw ApiException('no backend configured');
-    // v0.2.5: backend traffic also goes through the proxy when on.
-    final client = ProxyHttp.newClient();
+    final client = HttpClient();
     try {
       final request = await client
           .getUrl(Uri.parse('$base$path'))

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'downloads.dart';
 import 'local_store.dart';
+import 'pages/calculator_page.dart';
 import 'pages/categories_page.dart';
 import 'pages/favorites_page.dart';
 import 'pages/history_page.dart';
@@ -10,7 +11,6 @@ import 'pages/search_page.dart';
 import 'pages/settings_page.dart';
 import 'ph_api.dart';
 import 'play_cache.dart';
-import 'proxy_manager.dart';
 import 'settings.dart';
 import 'widgets/grid_toggle.dart';
 
@@ -22,9 +22,6 @@ void main() async {
   final watch = await WatchStore.load();
   final searchHistory = await SearchHistoryStore.load();
   final downloads = await DownloadManager.load();
-  // In-app proxy (v0.2.5): loads nodes + switch; if the switch was left
-  // on, the service starts in the background.
-  await ProxyManager.load();
   runApp(
     PhPlayerApp(
       settings: settings,
@@ -64,21 +61,17 @@ class _PhPlayerAppState extends State<PhPlayerApp> {
     backendUrl: widget.settings.backendUrl,
     cache: widget.cache,
   );
-  // v0.2.1: the PIN app lock was removed entirely (it was buggy).
-  // Only the 18+ gate below remains; there is no PIN state here anymore.
+  // Calculator disguise (v0.2.6): cold start always shows the calculator.
+  // The unlocked state lives only in memory — it is never persisted, so
+  // reopening the app always shows the calculator again. The calculator
+  // replaces the old 18+ gate; there is no separate age prompt anymore.
+  bool _unlocked = false;
 
   @override
   Widget build(BuildContext context) {
     final Widget home;
-    if (!widget.settings.ageConfirmed) {
-      home = AgeGateScreen(
-        settings: widget.settings,
-        api: _api,
-        favorites: widget.favorites,
-        watch: widget.watch,
-        searchHistory: widget.searchHistory,
-        downloads: widget.downloads,
-      );
+    if (!_unlocked) {
+      home = CalculatorPage(onUnlock: () => setState(() => _unlocked = true));
     } else {
       home = MainScreen(
         settings: widget.settings,
@@ -87,85 +80,13 @@ class _PhPlayerAppState extends State<PhPlayerApp> {
         watch: widget.watch,
         searchHistory: widget.searchHistory,
         downloads: widget.downloads,
+        onLock: () => setState(() => _unlocked = false),
       );
     }
     return MaterialApp(
-      title: 'PsexHub',
+      title: '计算器',
       theme: ThemeData.dark(useMaterial3: true),
       home: home,
-    );
-  }
-}
-
-class AgeGateScreen extends StatelessWidget {
-  const AgeGateScreen({
-    super.key,
-    required this.settings,
-    required this.api,
-    required this.favorites,
-    required this.watch,
-    required this.searchHistory,
-    required this.downloads,
-  });
-
-  final AppSettings settings;
-  final PhApi api;
-  final FavoritesStore favorites;
-  final WatchStore watch;
-  final SearchHistoryStore searchHistory;
-  final DownloadManager downloads;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.warning, size: 64),
-              const SizedBox(height: 24),
-              const Text(
-                '仅限 18 岁以上使用',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                '本 App 包含成人内容。继续使用即表示你已年满 18 岁，'
-                '且所在地区允许你访问此类内容。',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              FilledButton(
-                onPressed: () async {
-                  await settings.confirmAge();
-                  if (context.mounted) {
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                        builder: (_) => MainScreen(
-                          settings: settings,
-                          api: api,
-                          favorites: favorites,
-                          watch: watch,
-                          searchHistory: searchHistory,
-                          downloads: downloads,
-                        ),
-                      ),
-                    );
-                  }
-                },
-                child: const Text('我已满 18 岁，进入'),
-              ),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: () => Navigator.maybePop(context),
-                child: const Text('退出'),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -179,6 +100,7 @@ class MainScreen extends StatefulWidget {
     required this.watch,
     required this.searchHistory,
     required this.downloads,
+    required this.onLock,
   });
 
   final AppSettings settings;
@@ -187,6 +109,8 @@ class MainScreen extends StatefulWidget {
   final WatchStore watch;
   final SearchHistoryStore searchHistory;
   final DownloadManager downloads;
+  /// Back to the calculator (called by the system back button on Home).
+  final VoidCallback onLock;
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -261,7 +185,20 @@ class _MainScreenState extends State<MainScreen> {
         downloads: widget.downloads,
       ),
     ];
-    return Scaffold(
+    // System back on the Home tab locks back to the calculator; on other
+    // tabs it first goes back to Home (standard bottom-nav behavior).
+    // Pushed pages (player, category videos) pop normally above this.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_index != 0) {
+          setState(() => _index = 0);
+        } else {
+          widget.onLock();
+        }
+      },
+      child: Scaffold(
         appBar: AppBar(
           title: Text(titles[_index]),
           // Layout toggle on video lists only: not on the category-name
@@ -284,6 +221,7 @@ class _MainScreenState extends State<MainScreen> {
             BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
           ],
         ),
+      ),
     );
       },
     );

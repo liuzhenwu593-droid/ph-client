@@ -1,4 +1,4 @@
-/// Settings store: 18+ gate + optional backend URL + player prefs.
+/// Settings store: optional backend URL + player prefs.
 /// Kept separate so pages never touch SharedPreferences directly.
 /// A ChangeNotifier so the layout toggle (v0.2.2) can rebuild lists.
 library;
@@ -10,7 +10,6 @@ class AppSettings extends ChangeNotifier {
   AppSettings._(this._prefs);
   final SharedPreferences _prefs;
 
-  static const _ageKey = 'age_confirmed';
   static const _backendKey = 'backend_url';
   static const _seekSecondsKey = 'seek_seconds';
   static const _gridColumnsKey = 'grid_columns';
@@ -25,10 +24,6 @@ class AppSettings extends ChangeNotifier {
     await prefs.remove('pin_hash');
     return AppSettings._(prefs);
   }
-
-  bool get ageConfirmed => _prefs.getBool(_ageKey) ?? false;
-
-  Future<void> confirmAge() => _prefs.setBool(_ageKey, true);
 
   /// Empty string = no backend: the app parses Pornhub directly.
   String get backendUrl => _prefs.getString(_backendKey) ?? '';

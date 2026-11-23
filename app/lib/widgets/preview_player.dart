@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import 'thumb_image.dart';
-import '../proxy_client.dart';
-import '../proxy_relay.dart';
 
 /// Headers for preview clip requests (same browser headers as thumbs
 /// and the player; clips return 200 with or without Referer, verified
@@ -49,13 +47,8 @@ class _PreviewPlayerState extends State<PreviewPlayer> {
   }
 
   Future<void> _start() async {
-    // v0.2.5: previews go through the loopback relay when the proxy is
-    // on (ExoPlayer has no proxy setting); direct otherwise.
-    final playUrl = ProxyHttp.enabled
-        ? ProxyRelay.instance.mediaUrl(widget.previewUrl)
-        : widget.previewUrl;
     final controller = VideoPlayerController.networkUrl(
-      Uri.parse(playUrl),
+      Uri.parse(widget.previewUrl),
       httpHeaders: _previewHeaders,
     );
     _controller = controller;
