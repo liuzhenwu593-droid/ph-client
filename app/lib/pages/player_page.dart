@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:video_player/video_player.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../downloads.dart';
 import '../local_store.dart';
@@ -71,6 +72,10 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _controlsVisible = true;
   bool _locked = false;
   bool _triedFresh = false;
+  // Screen wakelock (v0.2.11): held only while actually playing, so the
+  // phone's screen timeout can't fire mid-video. Released on pause, on
+  // leaving this page, and on dispose.
+  bool _wakelockHeld = false;
   int _lastSecond = -1;
   int _lastRecordedSecond = -1;
 
@@ -318,9 +323,24 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// Keeps the screen on while playing, releases it otherwise.
+  /// Idempotent: the plugin call only fires when the state changes.
+  void _syncWakelock(bool playing) {
+    if (playing == _wakelockHeld) return;
+    _wakelockHeld = playing;
+    if (playing) {
+      unawaited(WakelockPlus.enable());
+    } else {
+      unawaited(WakelockPlus.disable());
+    }
+  }
+
   void _onTick() {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) return;
+    // Play/pause (overlay button, quality switch, video end) all flow
+    // through here, so the wakelock always matches the real state.
+    _syncWakelock(controller.value.isPlaying);
     final second = controller.value.position.inSeconds;
     if (second != _lastSecond) {
       _lastSecond = second;
@@ -543,6 +563,11 @@ class _PlayerPageState extends State<PlayerPage> {
     _hideTimer?.cancel();
     _flashTimer?.cancel();
     _recordPosition(force: true);
+    // Never hold the wakelock outside the player page.
+    if (_wakelockHeld) {
+      _wakelockHeld = false;
+      unawaited(WakelockPlus.disable());
+    }
     if (_initialBrightness != null) {
       ScreenBrightness()
           .setApplicationScreenBrightness(_initialBrightness!)

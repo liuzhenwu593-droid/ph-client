@@ -1,7 +1,7 @@
 name: ph_player
 description: "计算器 — 一个普通的计算器。"
 publish_to: "none"
-version: 0.2.10+12
+version: 0.2.11+13
 
 environment:
   sdk: ^3.9.0
@@ -23,6 +23,7 @@ dependencies:
   flutter_cache_manager: ^3.4.1
   # Auto-play previews: which list card is on screen (v0.2.2).
   visibility_detector: ^0.4.0+2
+  wakelock_plus: ^1.4.0
 
 dev_dependencies:
   flutter_test:
