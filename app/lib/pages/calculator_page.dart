@@ -4,20 +4,21 @@ import 'package:flutter/material.dart';
 ///
 /// It is a real calculator: +, −, ×, ÷, decimals, %, +/−, clear,
 /// backspace, and = all compute correctly. Exactly one input opens the
-/// real app: the expression `78+13` followed by `=`. Nothing else does —
+/// real app: the expression `78+13` or `13+78` followed by `=`.
+/// Nothing else does —
 /// other expressions that happen to equal 91 (e.g. 90+1) just show 91.
 ///
 /// v0.2.9: the big display shows the LIVE result while typing — once
 /// the expression is complete and evaluates (e.g. 78+13 shows 91 before
 /// = is pressed); while it is incomplete or unevaluable it shows the
 /// number being typed. The live result never unlocks anything: only
-/// 78+13 followed by = does.
+/// 78+13 or 13+78 followed by = does.
 ///
 /// There is no hint of the trigger anywhere in this UI.
 class CalculatorPage extends StatefulWidget {
   const CalculatorPage({super.key, required this.onUnlock});
 
-  /// Called when the user enters 78+13 and presses =.
+  /// Called when the user enters 78+13 or 13+78 and presses =.
   final VoidCallback onUnlock;
 
   @override
@@ -212,8 +213,9 @@ class _CalculatorPageState extends State<CalculatorPage> {
       expr = expr.substring(0, expr.length - 1);
     }
     if (expr.isEmpty) return;
-    // The one and only unlock: exactly 78+13 followed by =.
-    if (expr == '78+13') {
+    // The one and only unlock: exactly 78+13 or 13+78 followed by =.
+    // Order does not matter; anything else that equals 91 does not.
+    if (expr == '78+13' || expr == '13+78') {
       widget.onUnlock();
       return;
     }
@@ -339,8 +341,8 @@ class _CalculatorPageState extends State<CalculatorPage> {
     // The display flexes to fill the space above the keypad; the keys
     // stay 64dp tall with tight 8dp gaps, and the keypad is capped at
     // 420dp wide so it never stretches edge to edge. Everything fits
-    // on one screen with no scrolling. Logic, trigger rule (78+13 + =),
-    // and colours are unchanged.
+    // on one screen with no scrolling. Logic, trigger rule (78+13 or
+    // 13+78 + =), and colours are unchanged.
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
