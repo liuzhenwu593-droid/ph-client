@@ -23,7 +23,11 @@ dependencies:
   flutter_cache_manager: ^3.4.1
   # Auto-play previews: which list card is on screen (v0.2.2).
   visibility_detector: ^0.4.0+2
-  wakelock_plus: ^1.4.0
+  # Screen wakelock while playing (v0.2.11). Pinned to 1.3.3 on purpose:
+  # 1.4.0+ requires package_info_plus ^9.0.0, whose kotlin-stdlib 2.2.0
+  # the project's Kotlin 1.9.21 compiler cannot read (CI build failure
+  # 2026-11-25, run 45469269420). 1.3.3 caps it at <9.0.0.
+  wakelock_plus: 1.3.3
 
 dev_dependencies:
   flutter_test:
