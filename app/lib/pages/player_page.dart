@@ -15,6 +15,7 @@ import '../settings.dart';
 import '../widgets/thumb_image.dart';
 import '../widgets/video_list.dart';
 import 'author_page.dart';
+import 'tag_page.dart';
 
 /// Playback speeds offered in the player menu (shared by the state and
 /// the controls overlay below).
@@ -219,6 +220,24 @@ class _PlayerPageState extends State<PlayerPage> {
   void _openPornstar(String name) {
     _openAuthor(
       AuthorInfo(name: name, path: '/pornstar/${direct.pornstarSlug(name)}'),
+    );
+  }
+
+  /// Tag chip (v0.2.9): tapping a tag opens that tag's video list.
+  /// The tag route is the site's own — /video/search?search=TAG —
+  /// so the tag page just reuses the app's search.
+  void _openTag(String tag) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TagPage(
+          tag: tag,
+          api: widget.api,
+          favorites: widget.favorites,
+          watch: widget.watch,
+          settings: widget.settings,
+          downloads: widget.downloads,
+        ),
+      ),
     );
   }
 
@@ -820,20 +839,29 @@ class _PlayerPageState extends State<PlayerPage> {
                   ],
                 ),
               ],
-              if (widget.video.tags.isNotEmpty) ...[
+              // Tags (v0.2.9): detail-page tags when the detail fetch
+              // found them (every video), otherwise the list item's own
+              // tags (API-sourced videos). Tapping a chip opens that
+              // tag's video list. Hidden when neither source has tags.
+              if ((detail?.tags.isNotEmpty ?? false) ||
+                  widget.video.tags.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: widget.video.tags
-                      .take(12)
-                      .map(
-                        (t) => Chip(
-                          label: Text(t),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      )
-                      .toList(),
+                  children:
+                      ((detail != null && detail.tags.isNotEmpty)
+                              ? detail.tags
+                              : widget.video.tags)
+                          .take(12)
+                          .map(
+                            (t) => ActionChip(
+                              label: Text(t),
+                              visualDensity: VisualDensity.compact,
+                              onPressed: () => _openTag(t),
+                            ),
+                          )
+                          .toList(),
                 ),
               ],
               // Performers (v0.2.8 bonus): only API-sourced videos carry

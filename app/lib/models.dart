@@ -201,6 +201,7 @@ class VideoDetail {
     required this.thumb,
     required this.sources,
     this.author,
+    this.tags = const [],
   });
 
   factory VideoDetail.fromJson(Map<String, dynamic> json) {
@@ -224,6 +225,13 @@ class VideoDetail {
       author: json['author'] is Map<String, dynamic>
           ? AuthorInfo.fromJson(json['author'] as Map<String, dynamic>)
           : null,
+      // Cached tags are plain strings (toJson writes the list as-is).
+      tags: json['tags'] is List
+          ? (json['tags'] as List)
+                .map((e) => e.toString())
+                .where((s) => s.isNotEmpty)
+                .toList()
+          : const [],
     );
   }
 
@@ -239,6 +247,12 @@ class VideoDetail {
   /// author row then instead of crashing.
   final AuthorInfo? author;
 
+  /// The video's tags (v0.2.9), parsed from the detail page's
+  /// tagsWrapper. Empty when the detail came from the backend or an old
+  /// cache entry, or when the page had no tags block — the player then
+  /// falls back to the list item's own tags (API-sourced videos).
+  final List<String> tags;
+
   Map<String, dynamic> toJson() => {
     'viewkey': viewkey,
     'title': title,
@@ -246,6 +260,7 @@ class VideoDetail {
     'thumb': thumb,
     'sources': sources.map((s) => s.toJson()).toList(),
     if (author != null) 'author': author!.toJson(),
+    if (tags.isNotEmpty) 'tags': tags,
   };
 
   /// HLS first, highest quality first — same order the backend returns.

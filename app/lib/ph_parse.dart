@@ -290,8 +290,10 @@ Future<VideoDetail?> _tryOneFetch(String viewkey) async {
       thumb: (flashvars['image_url'] ?? '').toString(),
       sources: sources,
       // Same fetch, no extra request: the author comes from the about
-      // tab of this very page (see extractAuthor).
+      // tab of this very page (see extractAuthor), and the tags from
+      // its tagsWrapper (see extractTags).
       author: extractAuthor(html),
+      tags: extractTags(html),
     );
     final start = detail.startSource;
     if (start != null && await _verifyHls(start.url, viewkey)) {
@@ -954,6 +956,36 @@ AuthorInfo? extractAuthor(String html) {
     videosText: videos == null ? '' : '$videos Videos',
     subscribersText: subs == null ? '' : '$subs Subscribers',
   );
+}
+
+/// The video's tags (v0.2.9), from the detail page's `tagsWrapper`:
+/// `<a ... class="... item isTag" href="/video/search?search=...">`
+/// `<span>NAME</span></a>` — the same links the site itself uses for
+/// tag browsing (clicking a tag goes to /video/search?search=TAG).
+/// Returns [] when the page has no tags block; the caller falls back to
+/// the list item's own tags then. Verified live 2026-11-24 on
+/// ph5a7f1ba584481: 13 tags, matching the Webmasters API tags for the
+/// same video.
+List<String> extractTags(String html) {
+  final start = html.indexOf('tagsWrapper');
+  if (start < 0) return [];
+  // The wrapper holds only <p>Tags</p> plus the tag <a>s — no nested
+  // divs — so the first </div> after it closes the block.
+  final end = html.indexOf('</div>', start);
+  final window = end < 0
+      ? html.substring(start, (start + 10000).clamp(0, html.length))
+      : html.substring(start, end);
+  final seen = <String>{};
+  final tags = <String>[];
+  for (final match in RegExp(
+    r'<a[^>]*\bisTag\b[^>]*>\s*<span>([^<]+)</span>',
+    dotAll: true,
+  ).allMatches(window)) {
+    final name = _unescapeHtml(match.group(1)!.trim());
+    if (name.isNotEmpty && seen.add(name)) tags.add(name);
+    if (tags.length >= 15) break;
+  }
+  return tags;
 }
 
 /// "Alex Adams" -> "alex-adams", "Savannah Stéele" ->

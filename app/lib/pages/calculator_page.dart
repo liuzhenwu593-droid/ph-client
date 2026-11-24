@@ -4,14 +4,20 @@ import 'package:flutter/material.dart';
 ///
 /// It is a real calculator: +, −, ×, ÷, decimals, %, +/−, clear,
 /// backspace, and = all compute correctly. Exactly one input opens the
-/// real app: the expression `5×5` followed by `=`. Nothing else does —
-/// other expressions that happen to equal 25 (e.g. 10+15) just show 25.
+/// real app: the expression `78+13` followed by `=`. Nothing else does —
+/// other expressions that happen to equal 91 (e.g. 90+1) just show 91.
+///
+/// v0.2.9: the big display shows the LIVE result while typing — once
+/// the expression is complete and evaluates (e.g. 78+13 shows 91 before
+/// = is pressed); while it is incomplete or unevaluable it shows the
+/// number being typed. The live result never unlocks anything: only
+/// 78+13 followed by = does.
 ///
 /// There is no hint of the trigger anywhere in this UI.
 class CalculatorPage extends StatefulWidget {
   const CalculatorPage({super.key, required this.onUnlock});
 
-  /// Called when the user enters 5×5 and presses =.
+  /// Called when the user enters 78+13 and presses =.
   final VoidCallback onUnlock;
 
   @override
@@ -39,21 +45,62 @@ class _CalculatorPageState extends State<CalculatorPage> {
 
   /// Index of the start of the number currently being typed.
   /// A − directly before the number counts as its sign, not an operator.
-  int _currentNumberStart() {
-    var i = _expr.length;
-    while (i > 0 && !_ops.contains(_expr[i - 1])) {
+  /// Pass an expression to find the last number inside that instead.
+  int _numberStart([String? expr]) {
+    final e = expr ?? _expr;
+    var i = e.length;
+    while (i > 0 && !_ops.contains(e[i - 1])) {
       i--;
     }
     if (i > 0 &&
-        _expr[i - 1] == '−' &&
-        (i - 1 == 0 || _ops.contains(_expr[i - 2]))) {
+        e[i - 1] == '−' &&
+        (i - 1 == 0 || _ops.contains(e[i - 2]))) {
       i--;
     }
     return i;
   }
 
   String get _currentNumber =>
-      _expr.isEmpty ? '' : _expr.substring(_currentNumberStart());
+      _expr.isEmpty ? '' : _expr.substring(_numberStart());
+
+  /// Big display text (v0.2.9): live result while typing. When the
+  /// expression is complete and evaluates, the big digits show the
+  /// running result (typing 78+13 shows 91 before =); when it is
+  /// incomplete (e.g. 5×) or unevaluable (e.g. ÷0), they show the last
+  /// number entered. After = or an error the stored display is shown.
+  String get _displayText {
+    if (_error || _justEvaluated) return _display;
+    final live = _liveResult();
+    if (live != null) return live;
+    // Incomplete expression: drop any trailing operator and show the
+    // last number entered (e.g. "5" after typing 5×), not a bare 0.
+    var expr = _expr;
+    while (expr.isNotEmpty && _ops.contains(expr[expr.length - 1])) {
+      expr = expr.substring(0, expr.length - 1);
+    }
+    if (expr.isEmpty) return '0';
+    final num = expr.substring(_numberStart(expr));
+    return num.isEmpty ? '0' : num;
+  }
+
+  /// The live result, or null when there is nothing to show: no
+  /// expression, a trailing operator, no binary operator yet (a lone
+  /// number or a leading sign), or an unevaluable expression.
+  String? _liveResult() {
+    if (_expr.isEmpty) return null;
+    if (_ops.contains(_expr[_expr.length - 1])) return null;
+    var hasOp = false;
+    for (var i = 1; i < _expr.length; i++) {
+      if (_ops.contains(_expr[i])) {
+        hasOp = true;
+        break;
+      }
+    }
+    if (!hasOp) return null;
+    final value = _evaluate(_expr);
+    if (value == null || value.isNaN || value.isInfinite) return null;
+    return _format(value);
+  }
 
   void _inputDigit(String d) {
     setState(() {
@@ -118,7 +165,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
         _expr = _display;
         _justEvaluated = false;
       }
-      final start = _currentNumberStart();
+      final start = _numberStart();
       final cur = _currentNumber;
       if (cur.isEmpty) return;
       if (cur.startsWith('−')) {
@@ -137,7 +184,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
         _expr = _display;
         _justEvaluated = false;
       }
-      final start = _currentNumberStart();
+      final start = _numberStart();
       final cur = _currentNumber;
       final value = double.tryParse(cur.replaceAll('−', '-'));
       if (cur.isEmpty || value == null) return;
@@ -165,8 +212,8 @@ class _CalculatorPageState extends State<CalculatorPage> {
       expr = expr.substring(0, expr.length - 1);
     }
     if (expr.isEmpty) return;
-    // The one and only unlock: exactly 5×5 followed by =.
-    if (expr == '5×5') {
+    // The one and only unlock: exactly 78+13 followed by =.
+    if (expr == '78+13') {
       widget.onUnlock();
       return;
     }
@@ -292,7 +339,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
     // The display flexes to fill the space above the keypad; the keys
     // stay 64dp tall with tight 8dp gaps, and the keypad is capped at
     // 420dp wide so it never stretches edge to edge. Everything fits
-    // on one screen with no scrolling. Logic, trigger rule (5×5 + =),
+    // on one screen with no scrolling. Logic, trigger rule (78+13 + =),
     // and colours are unchanged.
     return Scaffold(
       backgroundColor: Colors.black,
@@ -319,7 +366,7 @@ class _CalculatorPageState extends State<CalculatorPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      _display,
+                      _displayText,
                       maxLines: 1,
                       textAlign: TextAlign.right,
                       overflow: TextOverflow.ellipsis,

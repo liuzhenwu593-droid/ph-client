@@ -103,7 +103,10 @@ List<VideoItem> parseSiteList(String html) {
   final videos = <VideoItem>[];
   for (final match in itemRe.allMatches(section)) {
     final block = match.group(0)!;
-    final vkey = RegExp(r'data-video-vkey="([0-9a-f]+)"')
+    // Viewkeys are [0-9a-z]+, not hex-only: ph-prefixed viewkeys are
+    // common (a hex-only pattern silently dropped them — same bug class
+    // fixed in search/home in v0.2.4).
+    final vkey = RegExp(r'data-video-vkey="([0-9a-z]+)"')
         .firstMatch(block)
         ?.group(1);
     if (vkey == null || vkey.isEmpty) continue;
