@@ -656,6 +656,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     onFullscreen: _toggleFullscreen,
                     isFullscreen: _isFullscreen,
                     onLock: _toggleLock,
+                    timelineSprites: _detail?.timelineSprites,
                   ),
                 ),
               if (_locked)
@@ -935,7 +936,16 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 }
 
-class _ControlsOverlay extends StatelessWidget {
+/// Player controls overlay: play/pause, speed, lock, fullscreen, and
+/// the progress bar. The progress bar is custom (v0.2.10) instead of
+/// VideoProgressIndicator so scrubbing can show a seek-preview
+/// thumbnail: while the user drags the bar, a bubble above it shows the
+/// sprite cell for the dragged-to timestamp plus the timestamp; the
+/// video only seeks when the drag is released. The sprite sheet is
+/// loaded lazily on the first scrub — never prefetched on page open.
+/// Without sprites (local file, backend detail, old cache, or a page
+/// with no thumbs block) the bubble shows only the timestamp.
+class _ControlsOverlay extends StatefulWidget {
   const _ControlsOverlay({
     required this.controller,
     required this.speed,
@@ -943,6 +953,7 @@ class _ControlsOverlay extends StatelessWidget {
     required this.onFullscreen,
     required this.isFullscreen,
     required this.onLock,
+    this.timelineSprites,
   });
 
   final VideoPlayerController controller;
@@ -952,16 +963,76 @@ class _ControlsOverlay extends StatelessWidget {
   final bool isFullscreen;
   final VoidCallback onLock;
 
+  /// Seek-preview sprites from the detail fetch, or null when the
+  /// detail has none.
+  final TimelineSprites? timelineSprites;
+
+  @override
+  State<_ControlsOverlay> createState() => _ControlsOverlayState();
+}
+
+class _ControlsOverlayState extends State<_ControlsOverlay> {
+  /// Scrub position as a 0..1 fraction of the duration, or null when
+  /// the user is not dragging the progress bar.
+  double? _scrubFraction;
+
   String _format(Duration d) {
     final m = d.inMinutes;
     final s = d.inSeconds % 60;
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
+  /// The time shown on the left: the scrub target while dragging,
+  /// otherwise the current position.
+  Duration get _shownPosition {
+    final duration = widget.controller.value.duration;
+    if (_scrubFraction == null || duration == Duration.zero) {
+      return widget.controller.value.position;
+    }
+    return duration * _scrubFraction!;
+  }
+
+  void _updateScrub(Offset local, double width) {
+    if (width <= 0) return;
+    setState(() {
+      _scrubFraction = (local.dx / width).clamp(0.0, 1.0);
+    });
+  }
+
+  void _endScrub() {
+    final fraction = _scrubFraction;
+    final duration = widget.controller.value.duration;
+    setState(() => _scrubFraction = null);
+    if (fraction != null && duration != Duration.zero) {
+      widget.controller.seekTo(duration * fraction);
+    }
+  }
+
+  void _cancelScrub() {
+    if (_scrubFraction != null) setState(() => _scrubFraction = null);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final position = controller.value.position;
     final duration = controller.value.duration;
+    final shown = _shownPosition;
+    final playedFraction = duration == Duration.zero
+        ? 0.0
+        : (position.inMilliseconds / duration.inMilliseconds).clamp(
+            0.0,
+            1.0,
+          );
+    final shownFraction = _scrubFraction ?? playedFraction;
+    var bufferedFraction = 0.0;
+    if (duration != Duration.zero) {
+      for (final range in controller.value.buffered) {
+        final end = range.end.inMilliseconds / duration.inMilliseconds;
+        if (end > bufferedFraction) bufferedFraction = end;
+      }
+      bufferedFraction = bufferedFraction.clamp(0.0, 1.0);
+    }
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -977,19 +1048,113 @@ class _ControlsOverlay extends StatelessWidget {
           Row(
             children: [
               Text(
-                _format(position),
+                _format(shown),
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: VideoProgressIndicator(
-                  controller,
-                  allowScrubbing: true,
-                  colors: const VideoProgressColors(
-                    playedColor: Colors.redAccent,
-                    bufferedColor: Colors.white38,
-                    backgroundColor: Colors.white24,
-                  ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    return GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragStart: (details) =>
+                          _updateScrub(details.localPosition, width),
+                      onHorizontalDragUpdate: (details) =>
+                          _updateScrub(details.localPosition, width),
+                      onHorizontalDragEnd: (_) => _endScrub(),
+                      onHorizontalDragCancel: _cancelScrub,
+                      onTapDown: (details) {
+                        // Tap-to-seek immediately, no preview bubble.
+                        if (duration == Duration.zero) return;
+                        final fraction =
+                            (details.localPosition.dx / width).clamp(
+                              0.0,
+                              1.0,
+                            );
+                        controller.seekTo(duration * fraction);
+                      },
+                      child: SizedBox(
+                        height: 28,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            // Preview bubble above the bar while scrubbing.
+                            if (_scrubFraction != null)
+                              Positioned(
+                                left: (_scrubFraction! * width - 84)
+                                    .clamp(
+                                      0.0,
+                                      width - 168 > 0 ? width - 168 : 0.0,
+                                    )
+                                    .toDouble(),
+                                bottom: 24,
+                                child: _ScrubPreview(
+                                  sprites: widget.timelineSprites,
+                                  seconds: shown.inSeconds,
+                                ),
+                              ),
+                            // Track: background, buffered, played.
+                            Positioned(
+                              left: 0,
+                              right: 0,
+                              top: 12,
+                              child: Container(
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: Colors.white24,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            ),
+                            if (bufferedFraction > 0)
+                              Positioned(
+                                left: 0,
+                                top: 12,
+                                width: bufferedFraction * width,
+                                child: Container(
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white38,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                              ),
+                            Positioned(
+                              left: 0,
+                              top: 12,
+                              width: shownFraction * width,
+                              child: Container(
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            ),
+                            // Playhead dot.
+                            Positioned(
+                              left: (shownFraction * width - 6)
+                                  .clamp(
+                                    -6.0,
+                                    width - 6 > 0 ? width - 6 : 0.0,
+                                  )
+                                  .toDouble(),
+                              top: 8,
+                              child: Container(
+                                width: 12,
+                                height: 12,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
               const SizedBox(width: 6),
@@ -1015,13 +1180,13 @@ class _ControlsOverlay extends StatelessWidget {
                 },
               ),
               PopupMenuButton<double>(
-                initialValue: speed,
-                onSelected: onSpeedChanged,
+                initialValue: widget.speed,
+                onSelected: widget.onSpeedChanged,
                 itemBuilder: (context) => _speedOptions
                     .map((s) => PopupMenuItem(value: s, child: Text('${s}x')))
                     .toList(),
                 child: Chip(
-                  label: Text('${speed}x'),
+                  label: Text('${widget.speed}x'),
                   visualDensity: VisualDensity.compact,
                 ),
               ),
@@ -1029,16 +1194,98 @@ class _ControlsOverlay extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.lock_outline, color: Colors.white),
                 tooltip: '锁屏防误触',
-                onPressed: onLock,
+                onPressed: widget.onLock,
               ),
               IconButton(
                 icon: Icon(
-                  isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                  widget.isFullscreen
+                      ? Icons.fullscreen_exit
+                      : Icons.fullscreen,
                   color: Colors.white,
                 ),
-                onPressed: onFullscreen,
+                onPressed: widget.onFullscreen,
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The seek-preview bubble shown above the progress bar while
+/// scrubbing (v0.2.10): the sprite cell for [seconds] (160x90 crop
+/// from the right 800x450 sheet) plus the timestamp. The sheet image
+/// is only requested when the bubble first appears — lazy, and
+/// Flutter's image cache keeps a loaded sheet in memory, so dragging
+/// across the same sheet is instant. When the video has no sprites,
+/// or the cell cannot be served, only the timestamp shows — never a
+/// wrong frame.
+class _ScrubPreview extends StatelessWidget {
+  const _ScrubPreview({required this.sprites, required this.seconds});
+
+  final TimelineSprites? sprites;
+  final int seconds;
+
+  String _format(int totalSeconds) {
+    final m = totalSeconds ~/ 60;
+    final s = totalSeconds % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cell = sprites?.cellFor(seconds);
+    final sheetUrl = cell == null
+        ? null
+        : sprites?.sheetUrl(cell.sheet);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white24),
+      ),
+      padding: const EdgeInsets.all(4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Container(
+              width: TimelineSprites.cellWidth.toDouble(),
+              height: TimelineSprites.cellHeight.toDouble(),
+              color: Colors.black,
+              child: sheetUrl == null
+                  ? const Center(
+                      child: Icon(
+                        Icons.image_not_supported,
+                        color: Colors.white54,
+                      ),
+                    )
+                  : Stack(
+                      children: [
+                        Positioned(
+                          left: -cell!.col * TimelineSprites.cellWidth.toDouble(),
+                          top:
+                              -cell.row * TimelineSprites.cellHeight.toDouble(),
+                          child: Image.network(
+                            sheetUrl,
+                            width: 800,
+                            height: 450,
+                            fit: BoxFit.fill,
+                            headers: _PlayerPageState._headers,
+                            errorBuilder: (_, _, _) =>
+                                const SizedBox.shrink(),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _format(seconds),
+            style: const TextStyle(color: Colors.white, fontSize: 12),
           ),
         ],
       ),

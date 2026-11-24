@@ -372,12 +372,19 @@ class PhApi {
   /// fetch the same page a second time. An empty list is NOT an error
   /// here (the author may genuinely have no videos on this page); the
   /// page shows its empty state. Only a fetch/parse failure throws.
+  ///
+  /// Sorting (v0.2.10): [ordering] is passed to the site fetch for
+  /// /model and /pornstar (server-side ?o=mv/?o=lg); for /channels and
+  /// /users the site cannot sort, so the author page sorts the loaded
+  /// videos client-side. The cache key includes the ordering so a
+  /// sorted page never reuses another sort's list.
   Future<List<VideoItem>> authorVideos(
     String authorPath, {
     int page = 1,
+    AuthorOrdering ordering = AuthorOrdering.mostRecent,
     bool forceRefresh = false,
   }) async {
-    final key = 'author:$authorPath:$page';
+    final key = 'author:$authorPath:$page:${ordering.name}';
     if (!forceRefresh) {
       final cached = lists.peek(key);
       if (cached != null) return cached;
@@ -387,10 +394,15 @@ class PhApi {
       final authorPage = await direct.directAuthorVideos(
         authorPath,
         page: page,
+        ordering: ordering,
       );
       items = authorPage.videos;
       if (authorPage.previews.isNotEmpty) {
-        _previewCache[_previewKey(authorPath: authorPath, page: page)] =
+        _previewCache[_previewKey(
+              authorPath: authorPath,
+              page: page,
+              ordering: ordering.name,
+            )] =
             _PreviewEntry(
               fetchedAt: DateTime.now().millisecondsSinceEpoch,
               urls: authorPage.previews,
@@ -440,6 +452,16 @@ class PhApi {
   /// map just means "no previews for this list" and the covers stay.
   final Map<String, _PreviewEntry> _previewCache = {};
 
+  /// Parse an [AuthorOrdering] back from its [Enum.name] (the preview
+  /// cache key carries the name as a plain string). Unknown values
+  /// fall back to most recent — the default order.
+  static AuthorOrdering _authorOrderingFromName(String? name) {
+    for (final ordering in AuthorOrdering.values) {
+      if (ordering.name == name) return ordering;
+    }
+    return AuthorOrdering.mostRecent;
+  }
+
   /// Preview-cache key. [ordering] is the site sort value (mv/tr/mr/lg)
   /// so a sorted search page does not reuse another sort's clip map.
   String _previewKey({
@@ -479,6 +501,7 @@ class PhApi {
         final authorPage = await direct.directAuthorVideos(
           authorPath,
           page: page,
+          ordering: _authorOrderingFromName(ordering),
         );
         _previewCache[key] = _PreviewEntry(
           fetchedAt: DateTime.now().millisecondsSinceEpoch,

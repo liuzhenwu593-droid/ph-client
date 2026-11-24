@@ -1,7 +1,7 @@
 name: ph_player
 description: "计算器 — 一个普通的计算器。"
 publish_to: "none"
-version: 0.2.9+11
+version: 0.2.10+12
 
 environment:
   sdk: ^3.9.0

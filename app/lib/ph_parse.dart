@@ -207,6 +207,41 @@ Future<bool> _verifyHls(String url, String viewkey) async {
   }
 }
 
+/// The video's seek-preview sprites (v0.2.10), from the flashvars
+/// `thumbs` object of the same detail fetch that gets playback URLs —
+/// no extra request.
+///
+/// Layout verified live 2026-11-24 on ph5a7f1ba584481 (28:50):
+/// `samplingFrequency` 9, 8 `spritePatterns` URLs, each sheet 800x450
+/// = 5x5 cells of 160x90 (checked by downloading a sheet and reading
+/// its pixels; cells are distinct frames). 1730s / 9 = 193 thumbs =
+/// 7.7 sheets, matching the 8 patterns. Returns null when the page
+/// has no usable thumbs block; the player then shows only the
+/// timestamp while scrubbing.
+TimelineSprites? extractTimelineSprites(Map<String, dynamic> flashvars) {
+  final thumbs = flashvars['thumbs'];
+  if (thumbs is! Map<String, dynamic>) return null;
+  final patterns = <String>[];
+  final raw = thumbs['spritePatterns'];
+  if (raw is List) {
+    for (final item in raw) {
+      final url = _unescapeHtml(item.toString());
+      if (url.isNotEmpty) patterns.add(url);
+    }
+  }
+  final urlPattern = _unescapeHtml((thumbs['urlPattern'] ?? '').toString());
+  final sampling = thumbs['samplingFrequency'] is num
+      ? (thumbs['samplingFrequency'] as num).toInt()
+      : 9;
+  if (patterns.isEmpty && !urlPattern.contains('{7}')) return null;
+  if (sampling <= 0) return null;
+  return TimelineSprites(
+    samplingSeconds: sampling,
+    patterns: patterns,
+    urlPattern: urlPattern,
+  );
+}
+
 List<VideoSource> _sourcesFromFlashvars(Map<String, dynamic> flashvars) {
   final defs = flashvars['mediaDefinitions'];
   if (defs is! List || defs.isEmpty) {
@@ -290,10 +325,12 @@ Future<VideoDetail?> _tryOneFetch(String viewkey) async {
       thumb: (flashvars['image_url'] ?? '').toString(),
       sources: sources,
       // Same fetch, no extra request: the author comes from the about
-      // tab of this very page (see extractAuthor), and the tags from
-      // its tagsWrapper (see extractTags).
+      // tab of this very page (see extractAuthor), the tags from
+      // its tagsWrapper (see extractTags), and the seek-preview
+      // sprites from flashvars.thumbs (see extractTimelineSprites).
       author: extractAuthor(html),
       tags: extractTags(html),
+      timelineSprites: extractTimelineSprites(flashvars),
     );
     final start = detail.startSource;
     if (start != null && await _verifyHls(start.url, viewkey)) {
@@ -870,13 +907,27 @@ SiteSearchPage _parseAuthorCards(String section) {
 /// overlap p1/p2); `/model/<slug>` and `/pornstar/<slug>` need the /videos
 /// subpage (the profile page ignores ?page=, /videos paginates 36
 /// fresh videos per page). See [AuthorInfo.videosUrl].
+///
+/// Sorting (v0.2.10, verified live 2026-11-24): /model and /pornstar
+/// /videos pages honour ?o=mv (most viewed) and ?o=lg (longest)
+/// server-side — pornstar p1/p2 with ?o=mv give 41 videos each, 0
+/// overlap — while ?o=mr 301-redirects to the default (most recent)
+/// order. /channels and /users do NOT sort server-side: ?o= on the
+/// profile page returns a list-less page (4 links, shorties only) and
+/// /videos?o=... 404s — so [ordering] is ignored here for those
+/// paths and the author page sorts client-side instead.
 /// Throws [ParseException] when the fetch fails or no cards are found.
 Future<SiteSearchPage> directAuthorVideos(
   String authorPath, {
   int page = 1,
+  AuthorOrdering ordering = AuthorOrdering.mostRecent,
 }) async {
   final base = AuthorInfo(name: '', path: authorPath).videosUrl;
-  final url = '$base?page=$page';
+  final isVideosPage =
+      authorPath.startsWith('/model/') ||
+      authorPath.startsWith('/pornstar/');
+  final sort = isVideosPage ? ordering.siteValue : null;
+  final url = '$base?page=$page${sort != null ? '&o=$sort' : ''}';
   ParseException? lastError;
   for (var attempt = 0; attempt < 2; attempt++) {
     try {

@@ -45,6 +45,35 @@ class _AuthorPageState extends State<AuthorPage> {
   bool _isLoadingMore = false;
   String? _error;
   int _page = 1;
+  AuthorOrdering _ordering = AuthorOrdering.mostRecent;
+
+  /// /model and /pornstar sort server-side (?o=mv/?o=lg on the
+  /// /videos subpage, verified live 2026-11-24); /channels and /users
+  /// cannot sort server-side (?o= kills the list / 404s), so those
+  /// sorts are applied client-side over the loaded videos below.
+  bool get _serverSorted =>
+      widget.author.path.startsWith('/model/') ||
+      widget.author.path.startsWith('/pornstar/');
+
+  /// Re-sort the accumulated list for channel/user pages (client-side
+  /// only — views and duration are known per card). Latest is the
+  /// server's default order, so it needs no sorting.
+  void _applyClientSort() {
+    if (_serverSorted || _ordering == AuthorOrdering.mostRecent) return;
+    if (_ordering == AuthorOrdering.mostViewed) {
+      _videos.sort((a, b) => b.views.compareTo(a.views));
+    } else {
+      _videos.sort(
+        (a, b) => b.durationSeconds.compareTo(a.durationSeconds),
+      );
+    }
+  }
+
+  void _setOrdering(AuthorOrdering ordering) {
+    if (ordering == _ordering) return;
+    setState(() => _ordering = ordering);
+    _load(reset: true);
+  }
 
   @override
   void initState() {
@@ -68,6 +97,7 @@ class _AuthorPageState extends State<AuthorPage> {
       final items = await widget.api.authorVideos(
         widget.author.path,
         page: page,
+        ordering: _ordering,
         forceRefresh: forceRefresh,
       );
       if (!mounted) return;
@@ -81,6 +111,7 @@ class _AuthorPageState extends State<AuthorPage> {
         for (final v in items) {
           if (_seenViewkeys.add(v.viewkey)) _videos.add(v);
         }
+        _applyClientSort();
         _page = page;
         _isLoading = false;
         _isLoadingMore = false;
@@ -103,6 +134,7 @@ class _AuthorPageState extends State<AuthorPage> {
       final urls = await widget.api.previewUrls(
         authorPath: widget.author.path,
         page: page,
+        ordering: _ordering.name,
       );
       if (!mounted || urls.isEmpty) return;
       setState(() => _previews.addAll(urls));
@@ -198,6 +230,28 @@ class _AuthorPageState extends State<AuthorPage> {
                   ),
                 ),
               ],
+            ),
+          ),
+          // Sort chips (v0.2.10): 最新 / 最热 / 最长. /model and
+          // /pornstar sort server-side; /channels and /users sort
+          // client-side over the loaded videos (see _applyClientSort).
+          // Default stays 最新, the same order as before.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              children: AuthorOrdering.values
+                  .map(
+                    (o) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(o.label),
+                        selected: _ordering == o,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => _setOrdering(o),
+                      ),
+                    ),
+                  )
+                  .toList(),
             ),
           ),
           Expanded(

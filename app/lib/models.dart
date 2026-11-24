@@ -58,6 +58,127 @@ class AuthorInfo {
   }
 }
 
+/// Author-page sort modes (v0.2.10).
+///
+/// Server-side support (verified live 2026-11-24): /model and /pornstar
+/// /videos pages honour ?o=mv (most viewed) and ?o=lg (longest); ?o=mr
+/// 301-redirects to the default (most recent) order. /channels and
+/// /users do NOT: ?o= on the profile page returns a list-less page and
+/// /videos?o=... 404s — those sorts are applied client-side over the
+/// loaded videos instead (views and duration are known per card).
+enum AuthorOrdering { mostRecent, mostViewed, longest }
+
+extension AuthorOrderingApi on AuthorOrdering {
+  String get label {
+    switch (this) {
+      case AuthorOrdering.mostRecent:
+        return '最新';
+      case AuthorOrdering.mostViewed:
+        return '最热';
+      case AuthorOrdering.longest:
+        return '最长';
+    }
+  }
+
+  /// The site's `o=` value for the /videos subpage, or null when the
+  /// sort IS the default order (most recent — no param needed).
+  String? get siteValue {
+    switch (this) {
+      case AuthorOrdering.mostRecent:
+        return null;
+      case AuthorOrdering.mostViewed:
+        return 'mv';
+      case AuthorOrdering.longest:
+        return 'lg';
+    }
+  }
+}
+
+/// Timeline (seek-preview) sprite sheets for one video (v0.2.10).
+///
+/// Parsed from the desktop detail page's flashvars `thumbs` object:
+/// `samplingFrequency` seconds per thumbnail and `spritePatterns`, one
+/// URL per sheet. Layout verified live 2026-11-24 on
+/// ph5a7f1ba584481 (28:50, sampling 9, 8 sheets): each sheet is an
+/// 800x450 image = 5 cols x 5 rows of 160x90 cells (25 thumbs per
+/// sheet); thumb index = seconds ~/ sampling; sheet = index ~/ 25,
+/// cell = index % 25. 1730s / 9 = 193 thumbs = 7.7 sheets, matching
+/// the 8 patterns. The `S{7}` in `urlPattern` is the sheet index —
+/// replacing S0 with S1/S7 in the first pattern yields the exact bytes
+/// of patterns[1]/[7] — so [sheetUrl] can also generate sheets from
+/// the pattern when the array is absent.
+class TimelineSprites {
+  const TimelineSprites({
+    required this.samplingSeconds,
+    required this.patterns,
+    this.urlPattern = '',
+  });
+
+  factory TimelineSprites.fromJson(Map<String, dynamic> json) {
+    final raw = json['patterns'];
+    final patterns = <String>[];
+    if (raw is List) {
+      for (final item in raw) {
+        final s = item.toString();
+        if (s.isNotEmpty) patterns.add(s);
+      }
+    }
+    return TimelineSprites(
+      samplingSeconds: json['samplingSeconds'] is num
+          ? (json['samplingSeconds'] as num).toInt()
+          : 9,
+      patterns: patterns,
+      urlPattern: (json['urlPattern'] ?? '').toString(),
+    );
+  }
+
+  /// Seconds between thumbnails (the page's samplingFrequency).
+  final int samplingSeconds;
+
+  /// Sprite sheet URLs in order (one per [cellsPerSheet] thumbnails).
+  final List<String> patterns;
+
+  /// Raw `urlPattern` with an `S{7}` sheet-index placeholder, kept as
+  /// a fallback when [patterns] is empty.
+  final String urlPattern;
+
+  static const cellWidth = 160;
+  static const cellHeight = 90;
+  static const cols = 5;
+  static const rows = 5;
+  static const cellsPerSheet = cols * rows;
+
+  Map<String, dynamic> toJson() => {
+    'samplingSeconds': samplingSeconds,
+    'patterns': patterns,
+    if (urlPattern.isNotEmpty) 'urlPattern': urlPattern,
+  };
+
+  /// URL of sprite sheet [sheet], or null when unknown. The patterns
+  /// array is authoritative: beyond its length there is no sheet, so
+  /// null is returned instead of a URL that would 404. The urlPattern
+  /// fallback only applies when the array is empty.
+  String? sheetUrl(int sheet) {
+    if (sheet < 0) return null;
+    if (sheet < patterns.length) return patterns[sheet];
+    if (patterns.isEmpty && urlPattern.contains('{7}')) {
+      return urlPattern.replaceAll('{7}', '$sheet');
+    }
+    return null;
+  }
+
+  /// Sheet + cell for [seconds] into the video, or null when the
+  /// layout cannot serve that timestamp.
+  ({int sheet, int col, int row})? cellFor(int seconds) {
+    if (samplingSeconds <= 0 || seconds < 0) return null;
+    final index = seconds ~/ samplingSeconds;
+    final sheet = index ~/ cellsPerSheet;
+    if (sheetUrl(sheet) == null) return null;
+    final cell = index % cellsPerSheet;
+    return (sheet: sheet, col: cell % cols, row: cell ~/ cols);
+  }
+}
+
 class VideoItem {
   const VideoItem({
     required this.viewkey,
@@ -202,6 +323,7 @@ class VideoDetail {
     required this.sources,
     this.author,
     this.tags = const [],
+    this.timelineSprites,
   });
 
   factory VideoDetail.fromJson(Map<String, dynamic> json) {
@@ -232,6 +354,11 @@ class VideoDetail {
                 .where((s) => s.isNotEmpty)
                 .toList()
           : const [],
+      timelineSprites: json['timelineSprites'] is Map<String, dynamic>
+          ? TimelineSprites.fromJson(
+              json['timelineSprites'] as Map<String, dynamic>,
+            )
+          : null,
     );
   }
 
@@ -253,6 +380,13 @@ class VideoDetail {
   /// falls back to the list item's own tags (API-sourced videos).
   final List<String> tags;
 
+  /// Seek-preview sprite sheets (v0.2.10), parsed from the detail
+  /// page's flashvars `thumbs` object in the same fetch. Null when the
+  /// detail came from the backend or an old cache entry, or when the
+  /// page had no thumbs block — the player then shows only the
+  /// timestamp while scrubbing, never a wrong frame.
+  final TimelineSprites? timelineSprites;
+
   Map<String, dynamic> toJson() => {
     'viewkey': viewkey,
     'title': title,
@@ -261,6 +395,8 @@ class VideoDetail {
     'sources': sources.map((s) => s.toJson()).toList(),
     if (author != null) 'author': author!.toJson(),
     if (tags.isNotEmpty) 'tags': tags,
+    if (timelineSprites != null)
+      'timelineSprites': timelineSprites!.toJson(),
   };
 
   /// HLS first, highest quality first — same order the backend returns.
