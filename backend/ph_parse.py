@@ -28,6 +28,7 @@ the chain shape (age cookie / Origin+Referer on /video/get_media);
 no yt-dlp code is vendored, and the `phub` library (AGPLv3) is NOT used.
 """
 
+import http.client
 import json
 import re
 import time
@@ -65,18 +66,40 @@ def _get(url, extra_headers=None):
     if extra_headers:
         headers.update(extra_headers)
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        return resp.status, resp.read()
+    last = None
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError:
+            raise  # real HTTP status: retrying will not help
+        except http.client.HTTPException as exc:
+            # IncompleteRead / RemoteDisconnected. A partial body is
+            # still usable for HTML parsing.
+            if isinstance(exc, http.client.IncompleteRead) and exc.partial:
+                return 200, exc.partial
+            last = exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last = exc
+        if attempt == 0:
+            time.sleep(0.5)
+    raise ParseError(f"fetch failed for {url}: {last}")
 
 
 def _get_json(url, extra_headers=None):
-    status, body = _get(url, extra_headers)
-    if status != 200:
-        raise ParseError(f"HTTP {status} from {url}")
-    try:
-        return json.loads(body.decode("utf-8"))
-    except Exception as exc:
-        raise ParseError(f"bad JSON from {url}: {exc}") from exc
+    last = None
+    for attempt in range(2):
+        status, body = _get(url, extra_headers)
+        if status != 200:
+            raise ParseError(f"HTTP {status} from {url}")
+        try:
+            return json.loads(body.decode("utf-8"))
+        except Exception as exc:
+            # Truncated body from a dropped connection: retry once.
+            last = ParseError(f"bad JSON from {url}: {exc}")
+            if attempt == 0:
+                time.sleep(0.5)
+    raise last
 
 
 def _clean_video(v):
@@ -108,12 +131,146 @@ def search(query="", page=1, ordering="mostviewed", period="weekly"):
         params["search"] = query
     if ordering:
         params["ordering"] = ordering
-    if period:
+    # Period is only honoured with mostviewed + a real query: empty search +
+    # period=weekly now answers {"code":"2001","message":"No Videos found!"},
+    # and toprated/mostrecent + period=weekly return an HTML page instead of
+    # JSON (both verified live 2026-11-25). Every ordering works without it.
+    if period and ordering == "mostviewed" and query:
         params["period"] = period
     url = BASE + "/webmasters/search?" + urllib.parse.urlencode(params)
     data = _get_json(url)
+    if "videos" not in data:
+        # API error shape, e.g. {"code":"2001","message":"No Videos found!"}:
+        # raise so callers fall back instead of serving an empty list.
+        raise ParseError(f"unexpected Webmasters search shape: {str(data)[:200]}")
     videos = data.get("videos", [])
     return {"videos": [_clean_video(v) for v in videos], "page": page}
+
+
+MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
+)
+
+
+def _balanced_ul(html, open_pattern):
+    """Balanced <ul> extraction starting at the first <ul> matching
+    open_pattern; returns None when not found or unclosed."""
+    m = re.search(open_pattern, html)
+    if not m:
+        return None
+    depth = 0
+    for t in re.finditer(r"</?ul\b[^>]*>", html[m.start():]):
+        if t.group(0).startswith("</"):
+            depth -= 1
+        else:
+            depth += 1
+        if depth == 0:
+            return html[m.start():m.start() + t.end()]
+    return None
+
+
+def parse_site_home(html):
+    """Main video list out of the mobile home page (?o=mv&t=w).
+
+    Same anchor the app uses (app/lib/ph_parse.dart parseSiteHome):
+    the <ul class="...browseVideo-tabSplit..."> section, cards keyed by
+    data-video-vkey ([0-9a-z]+, NOT hex-only). No rating on site cards.
+    """
+    section = _balanced_ul(
+        html, r'<ul[^>]*class="[^"]*browseVideo-tabSplit[^"]*"[^>]*>'
+    )
+    if section is None:
+        raise ParseError("home video list not found")
+    videos = []
+    for m in re.finditer(
+        r'<li\b[^>]*data-video-vkey="([0-9a-z]+)"[^>]*>.*?</li>', section, re.S
+    ):
+        block = m.group(0)
+        vkey = m.group(1)
+        title_m = re.search(r'alt="([^"]+)"', block)
+        title = _unescape_html(title_m.group(1)).strip() if title_m else ""
+        if not title:
+            title_m = re.search(
+                r'<div class="title">\s*<a[^>]*>(.*?)</a>', block, re.S
+            )
+            title = (
+                _unescape_html(re.sub(r"<[^>]*>", "", title_m.group(1)).strip())
+                if title_m
+                else ""
+            )
+        if not title:
+            continue
+        thumb_m = re.search(
+            r'data-poster="(https://[^"]*phncdn[^"]*)"', block
+        ) or re.search(r'src="(https://[^"]*phncdn[^"]*)"', block)
+        thumb = _unescape_html(thumb_m.group(1)) if thumb_m else ""
+        dur_m = re.search(r'<span class="time">([^<]+)</span>', block)
+        duration = dur_m.group(1).strip() if dur_m else ""
+        views_m = re.search(r'<div class="views">\s*([\d.,]+)\s*([KM])?', block)
+        views = (
+            _parse_views(
+                (views_m.group(1) or "") + (views_m.group(2) or "")
+            )
+            if views_m
+            else 0
+        )
+        videos.append(
+            {
+                "viewkey": vkey,
+                "title": title,
+                "duration": duration,
+                "views": views,
+                "rating": 0,
+                "thumb": thumb,
+                "url": BASE + "/view_video.php?viewkey=" + vkey,
+                "publish_date": "",
+                "tags": [],
+                "categories": [],
+                "pornstars": [],
+            }
+        )
+    if not videos:
+        raise ParseError("no videos parsed from site home")
+    return videos
+
+
+def site_home(page=1):
+    """Home feed from the mobile site home page (fallback when the API
+    fails). One retry, like the app: the site intermittently 302s/empties
+    the first request."""
+    url = BASE + f"/video?o=mv&t=w&page={page}"
+    last = None
+    for attempt in range(2):
+        try:
+            status, body = _get(
+                url,
+                extra_headers={"User-Agent": MOBILE_UA, "Referer": BASE + "/"},
+            )
+            if status != 200:
+                raise ParseError(f"site home HTTP {status}")
+            return {
+                "videos": parse_site_home(body.decode("utf-8", errors="ignore")),
+                "page": page,
+            }
+        except ParseError as exc:
+            last = exc
+            if attempt == 0:
+                time.sleep(0.5)
+    raise last or ParseError("site home failed")
+
+
+def home(page=1):
+    """Home feed: Webmasters mostviewed WITHOUT period (empty search +
+    period=weekly now returns code 2001), falling back to the mobile
+    site home page when the API fails or returns nothing."""
+    try:
+        result = search("", page, "mostviewed", "")
+        if result["videos"]:
+            return result
+    except ParseError:
+        pass
+    return site_home(page)
 
 
 def categories():
@@ -215,13 +372,12 @@ def parse_site_list(html):
     start = html.find('<ul id="videoCategory"')
     if start < 0:
         raise ParseError("videoCategory list not found")
-    end = html.find("</ul>", start)
-    if end < 0:
+    section = _balanced_ul(html, r'<ul id="videoCategory"')
+    if section is None:
         raise ParseError("videoCategory list not closed")
-    section = html[start:end]
     videos = []
     for block in re.findall(r'<li class="pcVideoListItem.*?</li>', section, re.S):
-        m = re.search(r'data-video-vkey="([0-9a-f]+)"', block)
+        m = re.search(r'data-video-vkey="([0-9a-z]+)"', block)
         if not m:
             continue
         vkey = m.group(1)
@@ -262,15 +418,24 @@ def parse_site_list(html):
 
 
 def category_videos(category_id, page=1):
-    """Videos inside one category (site page /video?c=<id>)."""
+    """Videos inside one category (site page /video?c=<id>). One retry:
+    the page is ~1.2 MB and the connection sometimes drops mid-body."""
     url = BASE + "/video?c=" + urllib.parse.quote(str(category_id)) + f"&page={page}"
-    status, body = _get(url)
-    if status != 200:
-        raise ParseError(f"category page HTTP {status} for {category_id}")
-    return {
-        "videos": parse_site_list(body.decode("utf-8", errors="ignore")),
-        "page": page,
-    }
+    last = None
+    for attempt in range(2):
+        try:
+            status, body = _get(url)
+            if status != 200:
+                raise ParseError(f"category page HTTP {status} for {category_id}")
+            return {
+                "videos": parse_site_list(body.decode("utf-8", errors="ignore")),
+                "page": page,
+            }
+        except ParseError as exc:
+            last = exc
+            if attempt == 0:
+                time.sleep(0.5)
+    raise last or ParseError("category page failed")
 
 
 def _verify_hls(url, viewkey):

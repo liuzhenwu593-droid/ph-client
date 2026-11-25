@@ -86,12 +86,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "service": "ph-parser", "time": int(time.time())})
             elif path == "/api/home":
                 page = self._int(qs, "page", 1)
-                self._send(200, ph_parse.search("", page, "mostviewed", "weekly"))
+                self._send(200, ph_parse.home(page))
             elif path == "/api/search":
                 q = qs.get("q", [""])[0]
                 page = self._int(qs, "page", 1)
                 ordering = qs.get("ordering", ["mostviewed"])[0]
-                period = qs.get("period", ["weekly"])[0]
+                period = qs.get("period", [""])[0]
                 self._send(200, ph_parse.search(q, page, ordering, period))
             elif path == "/api/categories":
                 self._send(200, ph_parse.categories())
