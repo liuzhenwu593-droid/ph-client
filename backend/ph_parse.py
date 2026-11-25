@@ -454,9 +454,124 @@ def _verify_hls(url, viewkey):
         return False
 
 
+def _extract_author(html):
+    """Current video's author, from the desktop detail page's "about"
+    tab (v0.2.8). Mirror of app/lib/ph_parse.dart extractAuthor.
+
+    Anchor: the single `video-detailed-info` block -> `usernameWrap
+    clearfix` -> first <a href="/channels|/model|/users|/pornstar/...">.
+    Do NOT anchor on `.videoUploaderBlock`: ~77 of those exist and they
+    all belong to related video cards. Returns None when the page has
+    no author block; the app hides the author row then."""
+    info_at = html.find("video-detailed-info")
+    if info_at < 0:
+        return None
+    window = html[info_at : info_at + 8000]
+    wrap = re.search(
+        r'<div class="usernameWrap clearfix"[^>]*>(.*?)</div>',
+        window,
+        re.S,
+    )
+    if not wrap:
+        return None
+    link = re.search(
+        r'<a [^>]*href="(/[^"]+)"[^>]*>(.*?)</a>', wrap.group(1), re.S
+    )
+    if not link:
+        return None
+    path = link.group(1)
+    if not (
+        path.startswith("/channels/")
+        or path.startswith("/model/")
+        or path.startswith("/users/")
+        or path.startswith("/pornstar/")
+    ):
+        return None
+    name = _unescape_html(re.sub(r"<[^>]*>", "", link.group(2)).strip())
+    if not name:
+        return None
+    avatar_url = ""
+    av = re.search(
+        r'<div class="userAvatar">.*?<img[^>]*src="([^"]+)"', window, re.S
+    )
+    if av:
+        avatar_url = _unescape_html(av.group(1))
+    tail = window[wrap.end() :]
+    videos_m = re.search(r"<span>([\d.,]+\s*[KM]?)\s*Videos</span>", tail)
+    subs_m = re.search(r"<span>([\d.,]+\s*[KM]?)\s*Subscribers</span>", tail)
+    return {
+        "name": name,
+        "path": path,
+        "avatarUrl": avatar_url,
+        "videosText": (
+            f"{videos_m.group(1).strip()} Videos" if videos_m else ""
+        ),
+        "subscribersText": (
+            f"{subs_m.group(1).strip()} Subscribers" if subs_m else ""
+        ),
+    }
+
+
+def _extract_tags(html):
+    """The video's tags (v0.2.9), from the detail page's `tagsWrapper`:
+    <a ... class="... item isTag"><span>NAME</span></a>. Mirror of
+    app/lib/ph_parse.dart extractTags. Returns [] when the page has no
+    tags block; the app falls back to the list item's tags then."""
+    start = html.find("tagsWrapper")
+    if start < 0:
+        return []
+    end = html.find("</div>", start)
+    window = html[start:end] if end >= 0 else html[start : start + 10000]
+    seen = set()
+    tags = []
+    for m in re.finditer(
+        r'<a[^>]*\bisTag\b[^>]*>\s*<span>([^<]+)</span>', window, re.S
+    ):
+        name = _unescape_html(m.group(1).strip())
+        if name and name not in seen:
+            seen.add(name)
+            tags.append(name)
+        if len(tags) >= 15:
+            break
+    return tags
+
+
+def _extract_timeline_sprites(flashvars):
+    """Seek-preview sprites (v0.2.10), from flashvars `thumbs` in the
+    same detail fetch. Mirror of app/lib/ph_parse.dart
+    extractTimelineSprites: samplingFrequency seconds per thumbnail,
+    spritePatterns one URL per sheet (800x450 = 5x5 cells of 160x90),
+    urlPattern kept as fallback. Returns None when the page has no
+    usable thumbs block; the app then shows only the timestamp."""
+    thumbs = flashvars.get("thumbs")
+    if not isinstance(thumbs, dict):
+        return None
+    patterns = []
+    raw = thumbs.get("spritePatterns")
+    if isinstance(raw, list):
+        for item in raw:
+            url = _unescape_html(str(item))
+            if url:
+                patterns.append(url)
+    url_pattern = _unescape_html(str(thumbs.get("urlPattern") or ""))
+    sampling = thumbs.get("samplingFrequency")
+    sampling = int(sampling) if isinstance(sampling, (int, float)) else 9
+    if not patterns and "{7}" not in url_pattern:
+        return None
+    if sampling <= 0:
+        return None
+    return {
+        "samplingSeconds": sampling,
+        "patterns": patterns,
+        "urlPattern": url_pattern,
+    }
+
+
 def _fetch_sources_once(viewkey):
-    """One detail-page fetch -> (flashvars, sources list). Raises ParseError
-    if the page is not in the expected shape."""
+    """One detail-page fetch -> (flashvars, sources list, raw html).
+    Raises ParseError if the page is not in the expected shape. The raw
+    html is returned so the caller can also parse author/tags from the
+    SAME fetch (no extra request per video)."""
     url = BASE + "/view_video.php?viewkey=" + urllib.parse.quote(viewkey)
     status, body = _get(url)
     if status != 200:
@@ -481,7 +596,7 @@ def _fetch_sources_once(viewkey):
                 "default": bool(d.get("defaultQuality", False)),
             }
         )
-    return flashvars, sources
+    return flashvars, sources, html
 
 
 def _start_candidate(sources):
@@ -502,9 +617,16 @@ def _start_candidate(sources):
 def video_sources(viewkey, max_attempts=10):
     """Fetch the detail page and return playable sources.
 
-    Returns {"viewkey", "title", "duration", "thumb", "sources": [...]} where
-    each source is {"quality", "format", "url", "width", "height",
-    "default": bool}. HLS (m3u8) entries are the working route; the mp4
+    Returns {"viewkey", "title", "duration", "thumb", "sources": [...],
+    "author": {...}|None, "tags": [...], "timelineSprites": {...}|None}
+    where each source is {"quality", "format", "url", "width", "height",
+    "default": bool}. The author/tags/sprites keys match the app's
+    VideoDetail.fromJson exactly (app/lib/models.dart): author is
+    {"name", "path", "avatarUrl", "videosText", "subscribersText"};
+    tags is a list of plain strings; timelineSprites is
+    {"samplingSeconds", "patterns", "urlPattern"}. All three are parsed
+    from the SAME detail-page fetch as the sources and are optional —
+    a page without one yields null/[] and never fails the response.
     /video/get_media entry currently returns [] and is kept only if
     Pornhub ever serves it again.
 
@@ -531,9 +653,20 @@ def video_sources(viewkey, max_attempts=10):
     for _round in range(rounds):
         with ThreadPoolExecutor(max_workers=per_round) as pool:
             results = list(pool.map(lambda _: _try_once(viewkey), range(per_round)))
-        for payload, error in results:
-            if payload is not None:
-                return payload
+        successes = [p for p, _e in results if p is not None]
+        if successes:
+            # Prefer the most complete payload: parallel fetches often
+            # truncate mid-page (flashvars present, so the HLS verifies,
+            # but the later author/tags blocks at ~700 KB are cut off —
+            # measured 2026-11-25: 5 parallel fetches gave 2x ~520 KB,
+            # 1x ~600 KB, 1x ~700 KB, only 1x full ~1.1 MB). A payload
+            # with an author is proof its page was complete. Costs
+            # nothing — the round already fetched all attempts.
+            for p in successes:
+                if p.get("author") is not None:
+                    return p
+            return successes[0]
+        for _p, error in results:
             last_error = error or last_error
     raise ParseError(
         f"no verifiable HLS URL after {max_attempts} attempts: {last_error}"
@@ -544,7 +677,7 @@ def _try_once(viewkey):
     """One fetch-and-verify attempt. Returns (payload, None) on success,
     (None, error) on failure. Never raises."""
     try:
-        flashvars, sources = _fetch_sources_once(viewkey)
+        flashvars, sources, html = _fetch_sources_once(viewkey)
     except ParseError as exc:
         return None, exc
     sources.sort(
@@ -561,6 +694,9 @@ def _try_once(viewkey):
             "duration": flashvars.get("video_duration", 0),
             "thumb": flashvars.get("image_url", ""),
             "sources": sources,
+            "author": _extract_author(html),
+            "tags": _extract_tags(html),
+            "timelineSprites": _extract_timeline_sprites(flashvars),
         }, None
     host = start["url"].split("/")[2] if start else "none"
     return None, ParseError(f"start HLS URL did not verify (host={host})")
